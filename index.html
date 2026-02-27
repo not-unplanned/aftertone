@@ -12,7 +12,7 @@
     body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
            margin: 24px; max-width: 820px; }
     h1 { font-size: 18px; margin: 0 0 14px; font-weight: 650; }
-    .row { display:flex; gap:18px; flex-wrap: wrap; }
+    .row { display:flex; gap:18px; flex-wrap: wrap;padding: 7px 7px 12px; }
     .card { border: 1px solid #2b2b2b; border-radius: 14px; padding: 14px 14px 12px;
             background: #0e0e10; flex:1 1 320px; }
     .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 650; color: #e8e8ea; }
@@ -77,9 +77,11 @@
         “Color” is a gentle tilt + lowpass. Brown-ish feels thicker; white cuts more.
       </div>
     </div>
+  </div>
 
+  <div class="row">
     <div class="card">
-      <h2>Tonal generator</h2>
+      <h2>Tonal generator A</h2>
       <div class="ctrl">
         <label for="musicVol">Music volume</label>
         <input id="musicVol" type="range" min="0" max="100" value="22">
@@ -104,6 +106,34 @@
     </div>
   </div>
 
+  <div class="row">
+
+    <div class="card">
+      <h2>Tonal generator B</h2>
+      <div class="ctrl">
+        <label for="musicVol2">Music volume</label>
+        <input id="musicVol2" type="range" min="0" max="100" value="18">
+        <div class="val" id="musicVol2Val">0.18</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="density2">Density (sparser ↔ busier)</label>
+        <input id="density2" type="range" min="0" max="100" value="35">
+        <div class="val" id="density2Val">0.35</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="brightness2">Brightness (darker ↔ brighter)</label>
+        <input id="brightness2" type="range" min="0" max="100" value="50">
+        <div class="val" id="brightness2Val">0.50</div>
+      </div>
+
+      <div class="tiny">
+        A second independent voice. Offset density/brightness from A for more movement.
+      </div>
+    </div>
+  </div>
+
   <p class="tiny">
     Works best in a dedicated tab. If your laptop sleeps, audio may pause; hit <code>Stop</code> then <code>Start</code>.
   </p>
@@ -124,6 +154,9 @@
     musicVol: $("musicVol"),
     density: $("density"),
     brightness: $("brightness"),
+    musicVol2: $("musicVol2"),
+    density2: $("density2"),
+    brightness2: $("brightness2"),
   };
 
   function r01(x){ return x / 100; }
@@ -135,8 +168,10 @@
 
   // nodes
   let masterGain, noiseGain, noisePan, noiseTilt, noiseLP, noiseWorklet;
-  let musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix;
-  let schedulerAbort = { aborted:false };
+  let musicA = null;
+  let musicB = null;
+  let schedulerAbortA = { aborted:false };
+  let schedulerAbortB = { aborted:false };
 
   // ---------- Generative logic ----------
   function expRand(meanSeconds) {
@@ -226,13 +261,14 @@
     noiseTilt.gain.setTargetAtTime(tiltDb, ctx.currentTime, 0.04);
   }
 
-  function applyMusicBrightness(amount01) {
+  function applyMusicBrightness(amount01, lpNode) {
+    if (!lpNode) return;
     // Dark -> bright: lowpass 1.2k -> 9k
     const hz = 1200 + amount01 * 7800;
-    musicLP.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
+    lpNode.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
   }
 
-  function playNote(freq, amp, durSeconds, bright01) {
+  function playNote(targetBus, freq, amp, durSeconds, bright01) {
     // A gentle tonal voice: triangle + very light FM shimmer.
     const t0 = ctx.currentTime;
     const t1 = t0 + durSeconds;
@@ -269,7 +305,7 @@
     carrier.detune.setValueAtTime((Math.random() * 8 - 4), t0);
 
     carrier.connect(vca);
-    vca.connect(musicBus);
+    vca.connect(targetBus);
 
     mod.start(t0);
     carrier.start(t0);
@@ -279,30 +315,71 @@
     carrier.stop(t1 + 0.05);
   }
 
-  async function schedulerLoop(abortToken) {
+  function buildMusicChain(volume01) {
+    const musicGain = ctx.createGain();
+    musicGain.gain.value = volume01;
+
+    const musicBus = ctx.createGain();
+
+    const musicLP = ctx.createBiquadFilter();
+    musicLP.type = "lowpass";
+    musicLP.Q.value = 0.35;
+
+    // delay
+    const delay = ctx.createDelay(2.0);
+    delay.delayTime.value = 0.42;
+    const delayFB = ctx.createGain();
+    delayFB.gain.value = 0.22;
+    delay.connect(delayFB);
+    delayFB.connect(delay);
+
+    // reverb
+    const reverb = ctx.createConvolver();
+    reverb.buffer = makeReverbIR(ctx, 2.6, 2.4);
+
+    const reverbMix = ctx.createGain();
+    reverbMix.gain.value = 0.26;
+
+    // route music: dry + wet
+    musicBus.connect(musicLP);
+    musicLP.connect(delay);
+    delay.connect(reverb);
+    reverb.connect(reverbMix);
+
+    // dry
+    musicLP.connect(musicGain);
+    // wet
+    reverbMix.connect(musicGain);
+
+    musicGain.connect(masterGain);
+
+    return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix };
+  }
+
+  async function schedulerLoop(abortToken, controls, targetBus) {
     const pick = makeNotePicker();
 
     while (!abortToken.aborted) {
       // Density maps to mean gap seconds:
       // 0 => ~30s gap, 1 => ~7s gap.
-      const d = r01(ui.density.value);
+      const d = r01(controls.density.value);
       const meanGap = 30 - d * 23;
 
       const gap = expRand(meanGap);
       await sleep(gap * 1000);
       if (abortToken.aborted) break;
 
-      const bright = r01(ui.brightness.value);
+      const bright = r01(controls.brightness.value);
       const freq = pick();
 
       // Quiet amplitude by design; scaled by Music volume.
-      const musicVol = r01(ui.musicVol.value);
+      const musicVol = r01(controls.musicVol.value);
       const amp = (0.012 + Math.random() * 0.02) * (0.25 + musicVol * 0.95);
 
       // Long durations: 5–18 sec
       const dur = 5 + Math.random() * 13;
 
-      playNote(freq, amp, dur, bright);
+      playNote(targetBus, freq, amp, dur, bright);
     }
   }
 
@@ -343,51 +420,28 @@
     noisePan.connect(noiseGain);
     noiseGain.connect(masterGain);
 
-    // Music chain
-    musicGain = ctx.createGain();
-    musicGain.gain.value = r01(ui.musicVol.value);
-
-    musicBus = ctx.createGain();
-
-    musicLP = ctx.createBiquadFilter();
-    musicLP.type = "lowpass";
-    musicLP.Q.value = 0.35;
-
-    // delay
-    delay = ctx.createDelay(2.0);
-    delay.delayTime.value = 0.42;
-    delayFB = ctx.createGain();
-    delayFB.gain.value = 0.22;
-    delay.connect(delayFB);
-    delayFB.connect(delay);
-
-    // reverb
-    reverb = ctx.createConvolver();
-    reverb.buffer = makeReverbIR(ctx, 2.6, 2.4);
-
-    reverbMix = ctx.createGain();
-    reverbMix.gain.value = 0.26;
-
-    // route music: dry + wet
-    musicBus.connect(musicLP);
-    musicLP.connect(delay);
-    delay.connect(reverb);
-    reverb.connect(reverbMix);
-
-    // dry
-    musicLP.connect(musicGain);
-    // wet
-    reverbMix.connect(musicGain);
-
-    musicGain.connect(masterGain);
+    // Music chains
+    musicA = buildMusicChain(r01(ui.musicVol.value));
+    musicB = buildMusicChain(r01(ui.musicVol2.value));
 
     // apply initial params
     applyNoiseColor(r01(ui.noiseColor.value));
-    applyMusicBrightness(r01(ui.brightness.value));
+    applyMusicBrightness(r01(ui.brightness.value), musicA.musicLP);
+    applyMusicBrightness(r01(ui.brightness2.value), musicB.musicLP);
 
-    // start scheduler
-    schedulerAbort = { aborted:false };
-    schedulerLoop(schedulerAbort);
+    // start schedulers
+    schedulerAbortA = { aborted:false };
+    schedulerAbortB = { aborted:false };
+    schedulerLoop(schedulerAbortA, {
+      density: ui.density,
+      musicVol: ui.musicVol,
+      brightness: ui.brightness,
+    }, musicA.musicBus);
+    schedulerLoop(schedulerAbortB, {
+      density: ui.density2,
+      musicVol: ui.musicVol2,
+      brightness: ui.brightness2,
+    }, musicB.musicBus);
 
     running = true;
     ui.toggle.textContent = "Stop";
@@ -396,10 +450,13 @@
 
   async function stop() {
     if (!running) return;
-    schedulerAbort.aborted = true;
+    schedulerAbortA.aborted = true;
+    schedulerAbortB.aborted = true;
 
     try { await ctx.close(); } catch {}
     ctx = null;
+    musicA = null;
+    musicB = null;
 
     running = false;
     ui.toggle.textContent = "Start";
@@ -415,6 +472,9 @@
     setVal("musicVolVal", r01(ui.musicVol.value));
     setVal("densityVal", r01(ui.density.value));
     setVal("brightnessVal", r01(ui.brightness.value));
+    setVal("musicVol2Val", r01(ui.musicVol2.value));
+    setVal("density2Val", r01(ui.density2.value));
+    setVal("brightness2Val", r01(ui.brightness2.value));
   }
 
   function bind() {
@@ -447,16 +507,29 @@
 
     ui.musicVol.addEventListener("input", () => {
       refreshUI();
-      if (ctx && musicGain) musicGain.gain.setTargetAtTime(r01(ui.musicVol.value), ctx.currentTime, 0.06);
+      if (ctx && musicA) musicA.musicGain.gain.setTargetAtTime(r01(ui.musicVol.value), ctx.currentTime, 0.06);
     });
 
     ui.brightness.addEventListener("input", () => {
       refreshUI();
-      if (ctx && musicLP) applyMusicBrightness(r01(ui.brightness.value));
+      if (ctx && musicA) applyMusicBrightness(r01(ui.brightness.value), musicA.musicLP);
     });
 
     // density only affects scheduling, so no node updates needed.
     ui.density.addEventListener("input", refreshUI);
+
+    ui.musicVol2.addEventListener("input", () => {
+      refreshUI();
+      if (ctx && musicB) musicB.musicGain.gain.setTargetAtTime(r01(ui.musicVol2.value), ctx.currentTime, 0.06);
+    });
+
+    ui.brightness2.addEventListener("input", () => {
+      refreshUI();
+      if (ctx && musicB) applyMusicBrightness(r01(ui.brightness2.value), musicB.musicLP);
+    });
+
+    // density2 only affects scheduling, so no node updates needed.
+    ui.density2.addEventListener("input", refreshUI);
   }
 
   bind();
@@ -464,4 +537,3 @@
 </script>
 </body>
 </html>
-
