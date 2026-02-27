@@ -165,6 +165,9 @@
   // ---------- Audio graph state ----------
   let ctx = null;
   let running = false;
+  let isStopping = false;
+  const FADE_IN_SEC = 1.0;
+  const FADE_OUT_SEC = 1.2;
 
   // nodes
   let masterGain, noiseGain, noisePan, noiseTilt, noiseLP, noiseWorklet;
@@ -392,13 +395,14 @@
 
   // ---------- Start/Stop ----------
   async function start() {
-    if (running) return;
+    if (running || isStopping) return;
 
     ctx = new (window.AudioContext || window.webkitAudioContext)();
 
     // Master
     masterGain = ctx.createGain();
-    masterGain.gain.value = r01(ui.master.value);
+    const startTime = ctx.currentTime;
+    masterGain.gain.setValueAtTime(0, startTime);
     masterGain.connect(ctx.destination);
 
     // Noise chain
@@ -479,20 +483,37 @@
       brightness: ui.brightness2,
     }, musicB.musicBus, voiceB);
 
+    masterGain.gain.cancelScheduledValues(ctx.currentTime);
+    masterGain.gain.setValueAtTime(0, ctx.currentTime);
+    masterGain.gain.linearRampToValueAtTime(r01(ui.master.value), ctx.currentTime + FADE_IN_SEC);
+
     running = true;
     ui.toggle.textContent = "Stop";
     ui.status.textContent = "Running";
   }
 
   async function stop() {
-    if (!running) return;
+    if (!running || isStopping) return;
+    isStopping = true;
+    ui.toggle.textContent = "Stopping...";
+    ui.status.textContent = "Stopping...";
+
     schedulerAbortA.aborted = true;
     schedulerAbortB.aborted = true;
+
+    if (ctx && masterGain) {
+      const stopTime = ctx.currentTime;
+      masterGain.gain.cancelScheduledValues(stopTime);
+      masterGain.gain.setValueAtTime(Math.max(0.0001, masterGain.gain.value), stopTime);
+      masterGain.gain.linearRampToValueAtTime(0.0001, stopTime + FADE_OUT_SEC);
+      await sleep((FADE_OUT_SEC + 0.05) * 1000);
+    }
 
     try { await ctx.close(); } catch {}
     ctx = null;
     musicA = null;
     musicB = null;
+    isStopping = false;
 
     running = false;
     ui.toggle.textContent = "Start";
@@ -523,6 +544,7 @@
 
     ui.master.addEventListener("input", () => {
       refreshUI();
+      if (isStopping) return;
       if (ctx && masterGain) masterGain.gain.setTargetAtTime(r01(ui.master.value), ctx.currentTime, 0.05);
     });
 
