@@ -112,24 +112,24 @@
       <h2>Tonal generator B</h2>
       <div class="ctrl">
         <label for="musicVol2">Music volume</label>
-        <input id="musicVol2" type="range" min="0" max="100" value="18">
-        <div class="val" id="musicVol2Val">0.18</div>
+        <input id="musicVol2" type="range" min="0" max="100" value="14">
+        <div class="val" id="musicVol2Val">0.14</div>
       </div>
 
       <div class="ctrl">
         <label for="density2">Density (sparser ↔ busier)</label>
-        <input id="density2" type="range" min="0" max="100" value="35">
-        <div class="val" id="density2Val">0.35</div>
+        <input id="density2" type="range" min="0" max="100" value="32">
+        <div class="val" id="density2Val">0.32</div>
       </div>
 
       <div class="ctrl">
         <label for="brightness2">Brightness (darker ↔ brighter)</label>
-        <input id="brightness2" type="range" min="0" max="100" value="50">
-        <div class="val" id="brightness2Val">0.50</div>
+        <input id="brightness2" type="range" min="0" max="100" value="62">
+        <div class="val" id="brightness2Val">0.62</div>
       </div>
 
       <div class="tiny">
-        A second independent voice. Offset density/brightness from A for more movement.
+        Tuned as a lighter upper voice with longer tails. Offset from A for call-and-response motion.
       </div>
     </div>
   </div>
@@ -188,7 +188,7 @@
 
   function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
-  function makeNotePicker() {
+  function makeNotePicker(baseMidi = 48) {
     // Minor pentatonic: forgiving + “never too melodic”.
     const scale = [0, 3, 5, 7, 10];
     let degree = 0;   // home-ish
@@ -208,8 +208,7 @@
       // Rare octave drift (minutes-scale).
       if (Math.random() < 0.03) octave = clamp(octave + (Math.random() < 0.5 ? -1 : 1), -1, 1);
 
-      const base = 48; // C3
-      const midi = base + octave * 12 + scale[degree];
+      const midi = baseMidi + octave * 12 + scale[degree];
       return midiToFreq(midi);
     };
   }
@@ -268,22 +267,25 @@
     lpNode.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
   }
 
-  function playNote(targetBus, freq, amp, durSeconds, bright01) {
+  function playNote(targetBus, freq, amp, durSeconds, bright01, profile = {}) {
     // A gentle tonal voice: triangle + very light FM shimmer.
     const t0 = ctx.currentTime;
     const t1 = t0 + durSeconds;
 
     const carrier = ctx.createOscillator();
-    carrier.type = "triangle";
+    carrier.type = profile.waveform || "triangle";
     carrier.frequency.setValueAtTime(freq, t0);
 
     const mod = ctx.createOscillator();
     mod.type = "sine";
-    mod.frequency.setValueAtTime(0.12 + Math.random() * 0.35, t0); // ultra-slow
+    const modMinHz = profile.modMinHz ?? 0.12;
+    const modSpanHz = profile.modSpanHz ?? 0.35;
+    mod.frequency.setValueAtTime(modMinHz + Math.random() * modSpanHz, t0); // ultra-slow
 
     const modGain = ctx.createGain();
     // tiny FM index, scaled a bit by brightness
-    modGain.gain.setValueAtTime((0.4 + bright01 * 1.2) * (Math.random() < 0.5 ? 1 : 0.7), t0);
+    const shimmerScale = profile.shimmerScale ?? 1;
+    modGain.gain.setValueAtTime(((0.4 + bright01 * 1.2) * (Math.random() < 0.5 ? 1 : 0.7)) * shimmerScale, t0);
 
     // FM: mod -> carrier.frequency
     mod.connect(modGain);
@@ -302,7 +304,8 @@
     vca.gain.exponentialRampToValueAtTime(0.0001, t1);
 
     // Gentle random detune drift
-    carrier.detune.setValueAtTime((Math.random() * 8 - 4), t0);
+    const detuneCents = profile.detuneCents ?? 4;
+    carrier.detune.setValueAtTime((Math.random() * 2 - 1) * detuneCents, t0);
 
     carrier.connect(vca);
     vca.connect(targetBus);
@@ -315,7 +318,7 @@
     carrier.stop(t1 + 0.05);
   }
 
-  function buildMusicChain(volume01) {
+  function buildMusicChain(volume01, profile = {}) {
     const musicGain = ctx.createGain();
     musicGain.gain.value = volume01;
 
@@ -323,13 +326,13 @@
 
     const musicLP = ctx.createBiquadFilter();
     musicLP.type = "lowpass";
-    musicLP.Q.value = 0.35;
+    musicLP.Q.value = profile.filterQ ?? 0.35;
 
     // delay
     const delay = ctx.createDelay(2.0);
-    delay.delayTime.value = 0.42;
+    delay.delayTime.value = profile.delayTime ?? 0.42;
     const delayFB = ctx.createGain();
-    delayFB.gain.value = 0.22;
+    delayFB.gain.value = profile.delayFeedback ?? 0.22;
     delay.connect(delayFB);
     delayFB.connect(delay);
 
@@ -338,7 +341,7 @@
     reverb.buffer = makeReverbIR(ctx, 2.6, 2.4);
 
     const reverbMix = ctx.createGain();
-    reverbMix.gain.value = 0.26;
+    reverbMix.gain.value = profile.reverbMix ?? 0.26;
 
     // route music: dry + wet
     musicBus.connect(musicLP);
@@ -356,14 +359,14 @@
     return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix };
   }
 
-  async function schedulerLoop(abortToken, controls, targetBus) {
-    const pick = makeNotePicker();
+  async function schedulerLoop(abortToken, controls, targetBus, profile = {}) {
+    const pick = makeNotePicker(profile.baseMidi ?? 48);
 
     while (!abortToken.aborted) {
       // Density maps to mean gap seconds:
       // 0 => ~30s gap, 1 => ~7s gap.
       const d = r01(controls.density.value);
-      const meanGap = 30 - d * 23;
+      const meanGap = (30 - d * 23) * (profile.gapScale ?? 1);
 
       const gap = expRand(meanGap);
       await sleep(gap * 1000);
@@ -374,12 +377,14 @@
 
       // Quiet amplitude by design; scaled by Music volume.
       const musicVol = r01(controls.musicVol.value);
-      const amp = (0.012 + Math.random() * 0.02) * (0.25 + musicVol * 0.95);
+      const amp = ((0.012 + Math.random() * 0.02) * (0.25 + musicVol * 0.95)) * (profile.ampScale ?? 1);
 
       // Long durations: 5–18 sec
-      const dur = 5 + Math.random() * 13;
+      const minDur = profile.minDur ?? 5;
+      const maxDur = profile.maxDur ?? 18;
+      const dur = minDur + Math.random() * Math.max(0.1, (maxDur - minDur));
 
-      playNote(targetBus, freq, amp, dur, bright);
+      playNote(targetBus, freq, amp, dur, bright, profile);
     }
   }
 
@@ -420,9 +425,40 @@
     noisePan.connect(noiseGain);
     noiseGain.connect(masterGain);
 
+    const voiceA = {
+      baseMidi: 48,
+      gapScale: 1,
+      ampScale: 1,
+      minDur: 5,
+      maxDur: 18,
+      delayTime: 0.42,
+      delayFeedback: 0.22,
+      reverbMix: 0.26,
+      filterQ: 0.35,
+      detuneCents: 4,
+      shimmerScale: 1,
+    };
+
+    const voiceB = {
+      baseMidi: 55,
+      gapScale: 0.95,
+      ampScale: 0.82,
+      minDur: 8,
+      maxDur: 22,
+      delayTime: 0.66,
+      delayFeedback: 0.27,
+      reverbMix: 0.34,
+      filterQ: 0.28,
+      detuneCents: 7,
+      shimmerScale: 1.2,
+      waveform: "sine",
+      modMinHz: 0.15,
+      modSpanHz: 0.45,
+    };
+
     // Music chains
-    musicA = buildMusicChain(r01(ui.musicVol.value));
-    musicB = buildMusicChain(r01(ui.musicVol2.value));
+    musicA = buildMusicChain(r01(ui.musicVol.value), voiceA);
+    musicB = buildMusicChain(r01(ui.musicVol2.value), voiceB);
 
     // apply initial params
     applyNoiseColor(r01(ui.noiseColor.value));
@@ -436,12 +472,12 @@
       density: ui.density,
       musicVol: ui.musicVol,
       brightness: ui.brightness,
-    }, musicA.musicBus);
+    }, musicA.musicBus, voiceA);
     schedulerLoop(schedulerAbortB, {
       density: ui.density2,
       musicVol: ui.musicVol2,
       brightness: ui.brightness2,
-    }, musicB.musicBus);
+    }, musicB.musicBus, voiceB);
 
     running = true;
     ui.toggle.textContent = "Stop";
