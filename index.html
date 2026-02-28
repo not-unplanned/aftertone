@@ -2,6 +2,10 @@
 <!doctype html>
 <html lang="en">
 <head>
+  <!--
+  # notUnplanned (ɔ) 2026
+  # Copyleft – all rights reversed
+  -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>aftertone</title>
@@ -15,7 +19,17 @@
     .row { display:flex; gap:18px; flex-wrap: wrap;padding: 7px 7px 12px; }
     .card { border: 1px solid #2b2b2b; border-radius: 14px; padding: 14px 14px 12px;
             background: #0e0e10; flex:1 1 320px; }
-    .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 650; color: #e8e8ea; }
+    .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 650; color: #e8e8ea;
+               display:flex; align-items:center; gap:8px; }
+    .led {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #2a0606;
+      box-shadow: inset 0 0 2px rgba(255, 210, 210, 0.15), 0 0 0 rgba(255, 52, 42, 0);
+      opacity: 0.22;
+      flex: 0 0 auto;
+    }
     .ctrl { display:grid; grid-template-columns: 150px 1fr 64px; align-items:center;
             gap: 10px; margin: 10px 0; }
     label { font-size: 12px; color: #c8c8cc; }
@@ -81,7 +95,7 @@
 
   <div class="row">
     <div class="card">
-      <h2>Tonal generator A</h2>
+      <h2><span class="led" id="musicLedA" aria-hidden="true"></span>Tonal generator A</h2>
       <div class="ctrl">
         <label for="musicVol">Music volume</label>
         <input id="musicVol" type="range" min="0" max="100" value="22">
@@ -109,7 +123,7 @@
   <div class="row">
 
     <div class="card">
-      <h2>Tonal generator B</h2>
+      <h2><span class="led" id="musicLedB" aria-hidden="true"></span>Tonal generator B</h2>
       <div class="ctrl">
         <label for="musicVol2">Music volume</label>
         <input id="musicVol2" type="range" min="0" max="100" value="14">
@@ -157,6 +171,8 @@
     musicVol2: $("musicVol2"),
     density2: $("density2"),
     brightness2: $("brightness2"),
+    musicLedA: $("musicLedA"),
+    musicLedB: $("musicLedB"),
   };
 
   function r01(x){ return x / 100; }
@@ -167,7 +183,11 @@
   let running = false;
   let isStopping = false;
   const FADE_IN_SEC = 1.0;
-  const FADE_OUT_SEC = 1.2;
+  const FADE_OUT_SEC = 2.0;
+  let masterFade = null;
+  let lastMasterVisual = 0;
+  let meterLevelA = 0;
+  let meterLevelB = 0;
 
   // nodes
   let masterGain, noiseGain, noisePan, noiseTilt, noiseLP, noiseWorklet;
@@ -346,6 +366,11 @@
     const reverbMix = ctx.createGain();
     reverbMix.gain.value = profile.reverbMix ?? 0.26;
 
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.78;
+    const meterData = new Float32Array(analyser.fftSize);
+
     // route music: dry + wet
     musicBus.connect(musicLP);
     musicLP.connect(delay);
@@ -357,9 +382,10 @@
     // wet
     reverbMix.connect(musicGain);
 
-    musicGain.connect(masterGain);
+    musicGain.connect(analyser);
+    analyser.connect(masterGain);
 
-    return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix };
+    return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix, analyser, meterData };
   }
 
   async function schedulerLoop(abortToken, controls, targetBus, profile = {}) {
@@ -393,6 +419,71 @@
 
   function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
+  function setLedLevel(node, amount01) {
+    if (!node) return;
+    const level = clamp(amount01, 0, 1);
+    const body = 0.22 + level * 0.78;
+    const glowSize = 2 + level * 12;
+    const glowAlpha = 0.08 + level * 0.72;
+    const edgeAlpha = 0.12 + level * 0.45;
+
+    node.style.opacity = (0.24 + level * 0.76).toFixed(3);
+    node.style.background = `rgba(255, 52, 42, ${body.toFixed(3)})`;
+    node.style.boxShadow = `inset 0 0 2px rgba(255, 210, 210, ${edgeAlpha.toFixed(3)}), 0 0 ${glowSize.toFixed(2)}px rgba(255, 52, 42, ${glowAlpha.toFixed(3)})`;
+  }
+
+  function readRms(chain) {
+    if (!chain || !chain.analyser || !chain.meterData) return 0;
+    chain.analyser.getFloatTimeDomainData(chain.meterData);
+    let sum = 0;
+    for (let i = 0; i < chain.meterData.length; i++) {
+      const s = chain.meterData[i];
+      sum += s * s;
+    }
+    return Math.sqrt(sum / chain.meterData.length);
+  }
+
+  function getMasterVisualGain() {
+    if (masterFade) {
+      const elapsed = performance.now() - masterFade.startedAt;
+      const t = clamp(elapsed / masterFade.durationMs, 0, 1);
+      lastMasterVisual = masterFade.from + (masterFade.to - masterFade.from) * t;
+      if (t >= 1) masterFade = null;
+      return lastMasterVisual;
+    }
+
+    if (!running && !isStopping) {
+      lastMasterVisual = 0;
+      return 0;
+    }
+
+    lastMasterVisual = r01(ui.master.value);
+    return lastMasterVisual;
+  }
+
+  function meterLoop() {
+    const masterNow = getMasterVisualGain();
+    const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1) * masterNow;
+    const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1) * masterNow;
+
+    meterLevelA = meterA > meterLevelA
+      ? meterLevelA + (meterA - meterLevelA) * 0.45
+      : meterLevelA * 0.88;
+    meterLevelB = meterB > meterLevelB
+      ? meterLevelB + (meterB - meterLevelB) * 0.45
+      : meterLevelB * 0.88;
+
+    if (!running && !isStopping) {
+      meterLevelA *= 0.8;
+      meterLevelB *= 0.8;
+    }
+
+    setLedLevel(ui.musicLedA, meterLevelA);
+    setLedLevel(ui.musicLedB, meterLevelB);
+
+    requestAnimationFrame(meterLoop);
+  }
+
   // ---------- Start/Stop ----------
   async function start() {
     if (running || isStopping) return;
@@ -404,6 +495,12 @@
     const startTime = ctx.currentTime;
     masterGain.gain.setValueAtTime(0, startTime);
     masterGain.connect(ctx.destination);
+    masterFade = {
+      from: 0,
+      to: r01(ui.master.value),
+      startedAt: performance.now(),
+      durationMs: FADE_IN_SEC * 1000,
+    };
 
     // Noise chain
     noiseGain = ctx.createGain();
@@ -498,6 +595,14 @@
     ui.toggle.textContent = "Stopping...";
     ui.status.textContent = "Stopping...";
 
+    const masterBeforeStop = getMasterVisualGain();
+    masterFade = {
+      from: masterBeforeStop,
+      to: 0,
+      startedAt: performance.now(),
+      durationMs: FADE_OUT_SEC * 1000,
+    };
+
     schedulerAbortA.aborted = true;
     schedulerAbortB.aborted = true;
 
@@ -513,6 +618,11 @@
     ctx = null;
     musicA = null;
     musicB = null;
+    masterFade = null;
+    meterLevelA = 0;
+    meterLevelB = 0;
+    setLedLevel(ui.musicLedA, 0);
+    setLedLevel(ui.musicLedB, 0);
     isStopping = false;
 
     running = false;
@@ -536,6 +646,7 @@
 
   function bind() {
     refreshUI();
+    meterLoop();
 
     ui.toggle.addEventListener("click", async () => {
       if (!running) await start();
