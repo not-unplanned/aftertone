@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <!--
+  # notUnplanned (ɔ) 2026
+  # Copyleft – all rights reversed
+  -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>aftertone</title>
+  <link rel="icon" href="./favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      margin: 24px;
+      max-width: 820px;
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0 0 14px;
+      font-weight: 650;
+    }
+
+    .row {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      padding: 7px 7px 12px;
+    }
+
+    .card {
+      border: 1px solid #2b2b2b;
+      border-radius: 14px;
+      padding: 14px 14px 12px;
+      background: #0e0e10;
+      flex: 1 1 320px;
+    }
+
+    .card h2 {
+      font-size: 14px;
+      margin: 0 0 10px;
+      font-weight: 650;
+      color: #e8e8ea;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .led {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #2a0606;
+      box-shadow: inset 0 0 2px rgba(255, 210, 210, 0.15), 0 0 0 rgba(255, 52, 42, 0);
+      opacity: 0.22;
+      flex: 0 0 auto;
+    }
+
+    .ctrl {
+      display: grid;
+      grid-template-columns: 150px 1fr 64px;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0;
+    }
+
+    label {
+      font-size: 12px;
+      color: #c8c8cc;
+    }
+
+    input[type="range"] {
+      width: 100%;
+    }
+
+    .val {
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      color: #c8c8cc;
+      text-align: right;
+    }
+
+    .bar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin: 14px 0 18px;
+    }
+
+    button {
+      border: 1px solid #2b2b2b;
+      background: #151518;
+      color: #f1f1f3;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #1a1a1f;
+    }
+
+    .status {
+      color: #a8a8ad;
+      font-size: 12px;
+    }
+
+    .tiny {
+      color: #8f8f95;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    code {
+      background: #141418;
+      padding: 2px 6px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>aftertone</h1>
+
+  <div class="bar">
+    <button id="toggle">Start</button>
+    <div class="status" id="status">Stopped</div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>Master</h2>
+      <div class="ctrl">
+        <label for="master">Master volume</label>
+        <input id="master" type="range" min="0" max="100" value="67">
+        <div class="val" id="masterVal">0.67</div>
+      </div>
+      <div class="tiny">
+        Tip: Keep master low, then bring up Noise/Music. Sparse stuff sounds “wrong” if it’s loud.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="led" id="noiseLed" aria-hidden="true"></span>Noise masker</h2>
+      <div class="ctrl">
+        <label for="noiseVol">Noise volume</label>
+        <input id="noiseVol" type="range" min="0" max="10" value="1">
+        <div class="val" id="noiseVolVal">0.01</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="noiseColor">Noise color (white → pink → brown)</label>
+        <input id="noiseColor" type="range" min="0" max="100" value="21">
+        <div class="val" id="noiseColorVal">0.21</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="noisePan">Noise pan (L ↔ R)</label>
+        <input id="noisePan" type="range" min="-100" max="100" value="-30">
+        <div class="val" id="noisePanVal">-0.30</div>
+      </div>
+
+      <div class="tiny">
+        “Color” is a gentle tilt + lowpass. Brown-ish feels thicker; white cuts more.
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2><span class="led" id="musicLedA" aria-hidden="true"></span>Tonal generator A</h2>
+      <div class="ctrl">
+        <label for="musicVol">Music volume</label>
+        <input id="musicVol" type="range" min="0" max="100" value="67">
+        <div class="val" id="musicVolVal">0.67</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="density">Density (sparser ↔ busier)</label>
+        <input id="density" type="range" min="0" max="100" value="89">
+        <div class="val" id="densityVal">0.89</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="brightness">Brightness (darker ↔ brighter)</label>
+        <input id="brightness" type="range" min="0" max="100" value="35">
+        <div class="val" id="brightnessVal">0.35</div>
+      </div>
+
+
+    </div>
+  </div>
+
+  <div class="row">
+
+    <div class="card">
+      <h2><span class="led" id="musicLedB" aria-hidden="true"></span>Tonal generator B</h2>
+      <div class="ctrl">
+        <label for="musicVol2">Music volume</label>
+        <input id="musicVol2" type="range" min="0" max="100" value="89">
+        <div class="val" id="musicVol2Val">0.89</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="density2">Density (sparser ↔ busier)</label>
+        <input id="density2" type="range" min="0" max="100" value="74">
+        <div class="val" id="density2Val">0.74</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="brightness2">Brightness (darker ↔ brighter)</label>
+        <input id="brightness2" type="range" min="0" max="100" value="62">
+        <div class="val" id="brightness2Val">0.62</div>
+      </div>
+
+      <div class="tiny">
+        Tuned as a lighter upper voice with longer tails. Offset from A for call-and-response motion.
+      </div>
+    </div>
+    <div class="tiny">
+      It's A minor pentatonic with weighted step movement + Poisson timing. Quiet on purpose.
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      // ---------- UI helpers ----------
+      const $ = (id) => document.getElementById(id);
+      const setVal = (id, v) => $(id).textContent = v.toFixed(2);
+
+      const ui = {
+        toggle: $("toggle"),
+        status: $("status"),
+        master: $("master"),
+        noiseVol: $("noiseVol"),
+        noiseColor: $("noiseColor"),
+        noisePan: $("noisePan"),
+        musicVol: $("musicVol"),
+        density: $("density"),
+        brightness: $("brightness"),
+        musicVol2: $("musicVol2"),
+        density2: $("density2"),
+        brightness2: $("brightness2"),
+        noiseLed: $("noiseLed"),
+        musicLedA: $("musicLedA"),
+        musicLedB: $("musicLedB"),
+      };
+
+      function r01(x) { return x / 100; }
+      function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+      // ---------- Audio graph state ----------
+      let ctx = null;
+      let running = false;
+      let isStopping = false;
+      const FADE_IN_SEC = 2.0;
+      const FADE_OUT_SEC = 3.0;
+      let masterFade = null;
+      let lastMasterVisual = 0;
+      let meterLevelNoise = 0;
+      let meterLevelA = 0;
+      let meterLevelB = 0;
+
+      // nodes
+      let masterGain, noiseGain, noisePan, noiseTilt, noiseLP, noiseWorklet;
+      let musicA = null;
+      let musicB = null;
+      let schedulerAbortA = { aborted: false };
+      let schedulerAbortB = { aborted: false };
+
+      // ---------- Generative logic ----------
+      function expRand(meanSeconds) {
+        // Exponential distribution for Poisson process timing.
+        return -Math.log(1 - Math.random()) * meanSeconds;
+      }
+
+      function chooseWeighted(items) {
+        const sum = items.reduce((a, x) => a + x.w, 0);
+        let r = Math.random() * sum;
+        for (const x of items) { r -= x.w; if (r <= 0) return x.v; }
+        return items[items.length - 1].v;
+      }
+
+      function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+      function makeNotePicker(baseMidi = 48) {
+        // Minor pentatonic: forgiving + “never too melodic”.
+        // A Minor Pentatonic: A (0), C(3), D(5), E(7), and G(10)
+        const scale = [0, 3, 5, 7, 10];
+
+        let degree = 0;   // home-ish
+        let octave = 0;   // slow drift
+
+        return function pick() {
+          // Stepwise most of the time.
+          const step = chooseWeighted([
+            { v: -2, w: 0.08 },
+            { v: -1, w: 0.34 },
+            { v: 0, w: 0.16 },
+            { v: 1, w: 0.34 },
+            { v: 2, w: 0.08 },
+          ]);
+          degree = clamp(degree + step, 0, scale.length - 1);
+
+          // Rare octave drift (minutes-scale).
+          if (Math.random() < 0.03) octave = clamp(octave + (Math.random() < 0.5 ? -1 : 1), -1, 1);
+
+          const midi = baseMidi + octave * 12 + scale[degree];
+          return midiToFreq(midi);
+        };
+      }
+
+      function makeReverbIR(ctx, seconds = 2.3, decay = 2.2) {
+        // Simple synthetic impulse response (stereo) for ConvolverNode.
+        const rate = ctx.sampleRate;
+        const length = Math.floor(rate * seconds);
+        const buffer = ctx.createBuffer(2, length, rate);
+        for (let c = 0; c < 2; c++) {
+          const data = buffer.getChannelData(c);
+          for (let i = 0; i < length; i++) {
+            const t = i / length;
+            // Noise shaped by exponential-ish decay.
+            data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
+          }
+        }
+        return buffer;
+      }
+
+      async function buildNoiseWorklet(ctx) {
+        const code = `
+      class NoiseNode extends AudioWorkletProcessor {
+        process(inputs, outputs) {
+          const out = outputs[0];
+          for (let ch = 0; ch < out.length; ch++) {
+            const o = out[ch];
+            for (let i = 0; i < o.length; i++) o[i] = (Math.random() * 2 - 1);
+          }
+          return true;
+        }
+      }
+      registerProcessor('noise-node', NoiseNode);
+    `;
+        const blob = new Blob([code], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        return new AudioWorkletNode(ctx, "noise-node", { numberOfOutputs: 1, outputChannelCount: [2] });
+      }
+
+      function applyNoiseColor(amount01) {
+        // amount01: 0 (white) -> 1 (brown-ish)
+        // We do a gentle lowpass + tilt using shelving filters.
+        // Map to meaningful ranges.
+        const lpHz = 18000 - amount01 * 15500; // 18k -> 2.5k
+        const tiltDb = -amount01 * 10;         // 0 -> -10 dB highs (darker)
+        noiseLP.frequency.setTargetAtTime(lpHz, ctx.currentTime, 0.04);
+        noiseTilt.gain.setTargetAtTime(tiltDb, ctx.currentTime, 0.04);
+      }
+
+      function applyMusicBrightness(amount01, lpNode) {
+        if (!lpNode) return;
+        // Dark -> bright: lowpass 1.2k -> 9k
+        const hz = 1200 + amount01 * 7800;
+        lpNode.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
+      }
+
+      function playNote(targetBus, freq, amp, durSeconds, bright01, profile = {}) {
+        // A gentle tonal voice: triangle + very light FM shimmer.
+        const t0 = ctx.currentTime;
+        const t1 = t0 + durSeconds;
+
+        const carrier = ctx.createOscillator();
+        carrier.type = profile.waveform || "triangle";
+        carrier.frequency.setValueAtTime(freq, t0);
+
+        const mod = ctx.createOscillator();
+        mod.type = "sine";
+        const modMinHz = profile.modMinHz ?? 0.12;
+        const modSpanHz = profile.modSpanHz ?? 0.35;
+        mod.frequency.setValueAtTime(modMinHz + Math.random() * modSpanHz, t0); // ultra-slow
+
+        const modGain = ctx.createGain();
+        // tiny FM index, scaled a bit by brightness
+        const shimmerScale = profile.shimmerScale ?? 1;
+        modGain.gain.setValueAtTime(((0.4 + bright01 * 1.2) * (Math.random() < 0.5 ? 1 : 0.7)) * shimmerScale, t0);
+
+        // FM: mod -> carrier.frequency
+        mod.connect(modGain);
+        modGain.connect(carrier.frequency);
+
+        const vca = ctx.createGain();
+        vca.gain.setValueAtTime(0, t0);
+
+        // Long, soft envelope
+        const a = 0.12 + Math.random() * 0.22; // attack
+        const r = 1.6 + Math.random() * 3.2;   // release tail
+        const sustainTime = Math.max(0.2, durSeconds - a - r);
+
+        vca.gain.linearRampToValueAtTime(amp, t0 + a);
+        vca.gain.setValueAtTime(amp, t0 + a + sustainTime);
+        vca.gain.exponentialRampToValueAtTime(0.0001, t1);
+
+        // Gentle random detune drift
+        const detuneCents = profile.detuneCents ?? 4;
+        carrier.detune.setValueAtTime((Math.random() * 2 - 1) * detuneCents, t0);
+
+        carrier.connect(vca);
+        vca.connect(targetBus);
+
+        mod.start(t0);
+        carrier.start(t0);
+
+        // stop
+        mod.stop(t1 + 0.05);
+        carrier.stop(t1 + 0.05);
+      }
+
+      function buildMusicChain(volume01, profile = {}) {
+        const musicGain = ctx.createGain();
+        musicGain.gain.value = volume01;
+
+        const musicBus = ctx.createGain();
+
+        const musicLP = ctx.createBiquadFilter();
+        musicLP.type = "lowpass";
+        musicLP.Q.value = profile.filterQ ?? 0.35;
+
+        // delay
+        const delay = ctx.createDelay(2.0);
+        delay.delayTime.value = profile.delayTime ?? 0.42;
+        const delayFB = ctx.createGain();
+        delayFB.gain.value = profile.delayFeedback ?? 0.22;
+        delay.connect(delayFB);
+        delayFB.connect(delay);
+
+        // reverb
+        const reverb = ctx.createConvolver();
+        reverb.buffer = makeReverbIR(ctx, 2.6, 2.4);
+
+        const reverbMix = ctx.createGain();
+        reverbMix.gain.value = profile.reverbMix ?? 0.26;
+
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.78;
+        const meterData = new Float32Array(analyser.fftSize);
+
+        // route music: dry + wet
+        musicBus.connect(musicLP);
+        musicLP.connect(delay);
+        delay.connect(reverb);
+        reverb.connect(reverbMix);
+
+        // dry
+        musicLP.connect(musicGain);
+        // wet
+        reverbMix.connect(musicGain);
+
+        musicGain.connect(analyser);
+        analyser.connect(masterGain);
+
+        return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix, analyser, meterData };
+      }
+
+      async function schedulerLoop(abortToken, controls, targetBus, profile = {}) {
+        const pick = makeNotePicker(profile.baseMidi ?? 48);
+
+        while (!abortToken.aborted) {
+          // Density maps to mean gap seconds:
+          // 0 => ~30s gap, 1 => ~7s gap.
+          const d = r01(controls.density.value);
+          const meanGap = (30 - d * 23) * (profile.gapScale ?? 1);
+
+          const gap = expRand(meanGap);
+          await sleep(gap * 1000);
+          if (abortToken.aborted) break;
+
+          const bright = r01(controls.brightness.value);
+          const freq = pick();
+
+          // Quiet amplitude by design; scaled by Music volume.
+          const musicVol = r01(controls.musicVol.value);
+          const amp = ((0.012 + Math.random() * 0.02) * (0.25 + musicVol * 0.95)) * (profile.ampScale ?? 1);
+
+          // Long durations: 5–18 sec
+          const minDur = profile.minDur ?? 5;
+          const maxDur = profile.maxDur ?? 18;
+          const dur = minDur + Math.random() * Math.max(0.1, (maxDur - minDur));
+
+          playNote(targetBus, freq, amp, dur, bright, profile);
+        }
+      }
+
+      function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+      function setLedLevel(node, amount01) {
+        if (!node) return;
+        const level = clamp(amount01, 0, 1);
+        const body = 0.22 + level * 0.78;
+        const glowSize = 2 + level * 12;
+        const glowAlpha = 0.08 + level * 0.72;
+        const edgeAlpha = 0.12 + level * 0.45;
+
+        node.style.opacity = (0.24 + level * 0.76).toFixed(3);
+        node.style.background = `rgba(255, 52, 42, ${body.toFixed(3)})`;
+        node.style.boxShadow = `inset 0 0 2px rgba(255, 210, 210, ${edgeAlpha.toFixed(3)}), 0 0 ${glowSize.toFixed(2)}px rgba(255, 52, 42, ${glowAlpha.toFixed(3)})`;
+      }
+
+      function readRms(chain) {
+        if (!chain || !chain.analyser || !chain.meterData) return 0;
+        chain.analyser.getFloatTimeDomainData(chain.meterData);
+        let sum = 0;
+        for (let i = 0; i < chain.meterData.length; i++) {
+          const s = chain.meterData[i];
+          sum += s * s;
+        }
+        return Math.sqrt(sum / chain.meterData.length);
+      }
+
+      function getMasterVisualGain() {
+        if (masterFade) {
+          const elapsed = performance.now() - masterFade.startedAt;
+          const t = clamp(elapsed / masterFade.durationMs, 0, 1);
+          lastMasterVisual = masterFade.from + (masterFade.to - masterFade.from) * t;
+          if (t >= 1) masterFade = null;
+          return lastMasterVisual;
+        }
+
+        if (!running && !isStopping) {
+          lastMasterVisual = 0;
+          return 0;
+        }
+
+        lastMasterVisual = r01(ui.master.value);
+        return lastMasterVisual;
+      }
+
+      function meterLoop() {
+        const masterNow = 1.0; // getMasterVisualGain();
+        const noiseLevel = clamp((r01(ui.noiseVol.value) - 0.004) / 0.09, 0, 1);
+        const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1);
+        const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1);
+
+        meterLevelNoise = noiseLevel > meterLevelNoise
+          ? meterLevelNoise + (noiseLevel - meterLevelNoise) * 0.25
+          : meterLevelNoise * 0.93;
+
+        meterLevelA = meterA > meterLevelA
+          ? meterLevelA + (meterA - meterLevelA) * 0.45
+          : meterLevelA * 0.88;
+        meterLevelB = meterB > meterLevelB
+          ? meterLevelB + (meterB - meterLevelB) * 0.45
+          : meterLevelB * 0.88;
+
+        if (!running && !isStopping) {
+          meterLevelNoise *= 0.8;
+          meterLevelA *= 0.8;
+          meterLevelB *= 0.8;
+        }
+
+        setLedLevel(ui.noiseLed, meterLevelNoise);
+        setLedLevel(ui.musicLedA, meterLevelA);
+        setLedLevel(ui.musicLedB, meterLevelB);
+
+        requestAnimationFrame(meterLoop);
+      }
+
+      // ---------- Start/Stop ----------
+      async function start() {
+        if (running || isStopping) return;
+
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Master
+        masterGain = ctx.createGain();
+        const startTime = ctx.currentTime;
+        masterGain.gain.setValueAtTime(0, startTime);
+        masterGain.connect(ctx.destination);
+        masterFade = {
+          from: 0,
+          to: r01(ui.master.value),
+          startedAt: performance.now(),
+          durationMs: FADE_IN_SEC * 1000,
+        };
+
+        // Noise chain
+        noiseGain = ctx.createGain();
+        noiseGain.gain.value = r01(ui.noiseVol.value);
+
+        const t0 = ctx.currentTime;
+
+        const mod = ctx.createOscillator();
+        mod.type = "sine";
+        mod.frequency.setValueAtTime(0.05, t0);
+
+        const modDepth = ctx.createGain();
+        modDepth.gain.setValueAtTime(0.003, t0);
+
+        mod.connect(modDepth);
+        modDepth.connect(noiseGain.gain);
+        mod.start(t0);
+
+        noisePan = ctx.createStereoPanner();
+        noisePan.pan.value = ui.noisePan.value / 100;
+
+        noiseTilt = ctx.createBiquadFilter();
+        noiseTilt.type = "highshelf";
+        noiseTilt.frequency.value = 2200; // tilt point
+
+        noiseLP = ctx.createBiquadFilter();
+        noiseLP.type = "lowpass";
+        noiseLP.Q.value = 0.2;
+
+        noiseWorklet = await buildNoiseWorklet(ctx);
+
+        // connect noise chain
+        noiseWorklet.connect(noiseTilt);
+        noiseTilt.connect(noiseLP);
+        noiseLP.connect(noisePan);
+        noisePan.connect(noiseGain);
+        noiseGain.connect(masterGain);
+
+        // MIDI notes lookup: https://studiocode.dev/resources/midi-middle-c/
+        // Middle C is 60 and it's semi tones from there. 
+        const voiceA = {
+          baseMidi: 45, //A1
+          gapScale: 1,
+          ampScale: 1,
+          minDur: 5,
+          maxDur: 18,
+          delayTime: 0.42,
+          delayFeedback: 0.22,
+          reverbMix: 0.26,
+          filterQ: 0.35,
+          detuneCents: 4,
+          shimmerScale: 1,
+        };
+
+        const voiceB = {
+          baseMidi: 52, // E1
+          gapScale: 0.95,
+          ampScale: 0.82,
+          minDur: 8,
+          maxDur: 22,
+          delayTime: 0.66,
+          delayFeedback: 0.27,
+          reverbMix: 0.34,
+          filterQ: 0.28,
+          detuneCents: 7,
+          shimmerScale: 1.2,
+          waveform: "sine",
+          modMinHz: 0.15,
+          modSpanHz: 0.45,
+        };
+
+        // Music chains
+        musicA = buildMusicChain(r01(ui.musicVol.value), voiceA);
+        musicB = buildMusicChain(r01(ui.musicVol2.value), voiceB);
+
+        // apply initial params
+        applyNoiseColor(r01(ui.noiseColor.value));
+        applyMusicBrightness(r01(ui.brightness.value), musicA.musicLP);
+        applyMusicBrightness(r01(ui.brightness2.value), musicB.musicLP);
+
+        // start schedulers
+        schedulerAbortA = { aborted: false };
+        schedulerAbortB = { aborted: false };
+        schedulerLoop(schedulerAbortA, {
+          density: ui.density,
+          musicVol: ui.musicVol,
+          brightness: ui.brightness,
+        }, musicA.musicBus, voiceA);
+        schedulerLoop(schedulerAbortB, {
+          density: ui.density2,
+          musicVol: ui.musicVol2,
+          brightness: ui.brightness2,
+        }, musicB.musicBus, voiceB);
+
+        masterGain.gain.cancelScheduledValues(ctx.currentTime);
+        masterGain.gain.setValueAtTime(0, ctx.currentTime);
+        masterGain.gain.linearRampToValueAtTime(r01(ui.master.value), ctx.currentTime + FADE_IN_SEC);
+
+        running = true;
+        ui.toggle.textContent = "Stop";
+        ui.status.textContent = "Running";
+      }
+
+      async function stop() {
+        if (!running || isStopping) return;
+        isStopping = true;
+        ui.toggle.textContent = "Stopping...";
+        ui.status.textContent = "Stopping...";
+
+        const masterBeforeStop = getMasterVisualGain();
+        masterFade = {
+          from: masterBeforeStop,
+          to: 0,
+          startedAt: performance.now(),
+          durationMs: FADE_OUT_SEC * 1000,
+        };
+
+        schedulerAbortA.aborted = true;
+        schedulerAbortB.aborted = true;
+
+        if (ctx && masterGain) {
+          const stopTime = ctx.currentTime;
+          masterGain.gain.cancelScheduledValues(stopTime);
+          masterGain.gain.setValueAtTime(Math.max(0.0001, masterGain.gain.value), stopTime);
+          masterGain.gain.linearRampToValueAtTime(0.0001, stopTime + FADE_OUT_SEC);
+          await sleep((FADE_OUT_SEC + 0.05) * 1000);
+        }
+
+        try { await ctx.close(); } catch { }
+        ctx = null;
+        musicA = null;
+        musicB = null;
+        masterFade = null;
+        meterLevelNoise = 0;
+        meterLevelA = 0;
+        meterLevelB = 0;
+        setLedLevel(ui.noiseLed, 0);
+        setLedLevel(ui.musicLedA, 0);
+        setLedLevel(ui.musicLedB, 0);
+        isStopping = false;
+
+        running = false;
+        ui.toggle.textContent = "Start";
+        ui.status.textContent = "Stopped";
+      }
+
+      // ---------- UI wiring ----------
+      function refreshUI() {
+        setVal("masterVal", r01(ui.master.value));
+        setVal("noiseVolVal", r01(ui.noiseVol.value));
+        setVal("noiseColorVal", r01(ui.noiseColor.value));
+        setVal("noisePanVal", ui.noisePan.value / 100);
+        setVal("musicVolVal", r01(ui.musicVol.value));
+        setVal("densityVal", r01(ui.density.value));
+        setVal("brightnessVal", r01(ui.brightness.value));
+        setVal("musicVol2Val", r01(ui.musicVol2.value));
+        setVal("density2Val", r01(ui.density2.value));
+        setVal("brightness2Val", r01(ui.brightness2.value));
+      }
+
+      function bind() {
+        refreshUI();
+        meterLoop();
+
+        ui.toggle.addEventListener("click", async () => {
+          if (!running) await start();
+          else await stop();
+        });
+
+        ui.master.addEventListener("input", () => {
+          refreshUI();
+          if (isStopping) return;
+          if (ctx && masterGain) masterGain.gain.setTargetAtTime(r01(ui.master.value), ctx.currentTime, 0.05);
+        });
+
+        ui.noiseVol.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && noiseGain) noiseGain.gain.setTargetAtTime(r01(ui.noiseVol.value), ctx.currentTime, 0.05);
+        });
+
+        ui.noisePan.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && noisePan) noisePan.pan.setTargetAtTime(ui.noisePan.value / 100, ctx.currentTime, 0.05);
+        });
+
+        ui.noiseColor.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && noiseLP && noiseTilt) applyNoiseColor(r01(ui.noiseColor.value));
+        });
+
+        ui.musicVol.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && musicA) musicA.musicGain.gain.setTargetAtTime(r01(ui.musicVol.value), ctx.currentTime, 0.06);
+        });
+
+        ui.brightness.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && musicA) applyMusicBrightness(r01(ui.brightness.value), musicA.musicLP);
+        });
+
+        // density only affects scheduling, so no node updates needed.
+        ui.density.addEventListener("input", refreshUI);
+
+        ui.musicVol2.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && musicB) musicB.musicGain.gain.setTargetAtTime(r01(ui.musicVol2.value), ctx.currentTime, 0.06);
+        });
+
+        ui.brightness2.addEventListener("input", () => {
+          refreshUI();
+          if (ctx && musicB) applyMusicBrightness(r01(ui.brightness2.value), musicB.musicLP);
+        });
+
+        // density2 only affects scheduling, so no node updates needed.
+        ui.density2.addEventListener("input", refreshUI);
+      }
+
+      bind();
+    })();
+  </script>
+</body>
+
+</html>
