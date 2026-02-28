@@ -1,4 +1,5 @@
 #/bin/bash 
 
+(sleep 3 && open http://localhost:8000 ) &
 python3 -m http.server 8000
 
