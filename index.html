@@ -260,6 +260,53 @@
       function r01(x) { return x / 100; }
       function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
+      // ---------- Event-based modulation (music only) ----------
+      // Goal: tiny, occasional parameter nudges to keep the tonal voices alive,
+      // without touching the noise masker settings.
+      let modTimers = [];
+      let musicBrightOffsetA = 0;
+      let musicBrightOffsetB = 0;
+
+      function randBetween(min, max) { return min + Math.random() * (max - min); }
+
+      function stopAllMusicNudges() {
+        for (const t of modTimers) clearTimeout(t);
+        modTimers = [];
+      }
+
+      function scheduleMusicNudges() {
+        // Safety: if called twice, clear prior timers.
+        stopAllMusicNudges();
+
+        // Bounds chosen to be felt, not heard.
+        const OFFSET_STEP = 0.03;   // nudge size (in 0..1 brightness units)
+        const OFFSET_MAX = 0.12;    // max drift away from UI position
+
+        const nudgeA = () => {
+          if (!ctx || !running || !musicA) return;
+          const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
+          musicBrightOffsetA = clamp(musicBrightOffsetA + delta, -OFFSET_MAX, OFFSET_MAX);
+          const base = r01(ui.brightness.value);
+          applyMusicBrightness(clamp(base + musicBrightOffsetA, 0, 1), musicA.musicLP);
+          const nextMs = Math.floor(randBetween(12000, 38000));
+          modTimers.push(setTimeout(nudgeA, nextMs));
+        };
+
+        const nudgeB = () => {
+          if (!ctx || !running || !musicB) return;
+          const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
+          musicBrightOffsetB = clamp(musicBrightOffsetB + delta, -OFFSET_MAX, OFFSET_MAX);
+          const base = r01(ui.brightness2.value);
+          applyMusicBrightness(clamp(base + musicBrightOffsetB, 0, 1), musicB.musicLP);
+          const nextMs = Math.floor(randBetween(15000, 45000));
+          modTimers.push(setTimeout(nudgeB, nextMs));
+        };
+
+        // Start with a gentle delay so it doesn't feel like immediate automation.
+        modTimers.push(setTimeout(nudgeA, Math.floor(randBetween(8000, 16000))));
+        modTimers.push(setTimeout(nudgeB, Math.floor(randBetween(10000, 20000))));
+      }
+
       // ---------- Audio graph state ----------
       let ctx = null;
       let running = false;
@@ -670,8 +717,8 @@
 
         // apply initial params
         applyNoiseColor(r01(ui.noiseColor.value));
-        applyMusicBrightness(r01(ui.brightness.value), musicA.musicLP);
-        applyMusicBrightness(r01(ui.brightness2.value), musicB.musicLP);
+        applyMusicBrightness(clamp(r01(ui.brightness.value) + musicBrightOffsetA, 0, 1), musicA.musicLP);
+        applyMusicBrightness(clamp(r01(ui.brightness2.value) + musicBrightOffsetB, 0, 1), musicB.musicLP);
 
         // start schedulers
         schedulerAbortA = { aborted: false };
@@ -686,6 +733,7 @@
           musicVol: ui.musicVol2,
           brightness: ui.brightness2,
         }, musicB.musicBus, voiceB);
+        scheduleMusicNudges();
 
         masterGain.gain.cancelScheduledValues(ctx.currentTime);
         masterGain.gain.setValueAtTime(0, ctx.currentTime);
@@ -712,6 +760,7 @@
 
         schedulerAbortA.aborted = true;
         schedulerAbortB.aborted = true;
+        stopAllMusicNudges();
 
         if (ctx && masterGain) {
           const stopTime = ctx.currentTime;
@@ -790,7 +839,7 @@
 
         ui.brightness.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicA) applyMusicBrightness(r01(ui.brightness.value), musicA.musicLP);
+          if (ctx && musicA) applyMusicBrightness(clamp(r01(ui.brightness.value) + musicBrightOffsetA, 0, 1), musicA.musicLP);
         });
 
         // density only affects scheduling, so no node updates needed.
@@ -803,7 +852,7 @@
 
         ui.brightness2.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicB) applyMusicBrightness(r01(ui.brightness2.value), musicB.musicLP);
+          if (ctx && musicB) applyMusicBrightness(clamp(r01(ui.brightness2.value) + musicBrightOffsetB, 0, 1), musicB.musicLP);
         });
 
         // density2 only affects scheduling, so no node updates needed.
