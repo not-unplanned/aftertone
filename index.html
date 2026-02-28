@@ -71,20 +71,20 @@
       <h2>Noise masker</h2>
       <div class="ctrl">
         <label for="noiseVol">Noise volume</label>
-        <input id="noiseVol" type="range" min="0" max="100" value="28">
-        <div class="val" id="noiseVolVal">0.28</div>
+        <input id="noiseVol" type="range" min="0" max="30" value="5">
+        <div class="val" id="noiseVolVal">0.05</div>
       </div>
 
       <div class="ctrl">
         <label for="noiseColor">Noise color (white → pink → brown)</label>
-        <input id="noiseColor" type="range" min="0" max="100" value="55">
-        <div class="val" id="noiseColorVal">0.55</div>
+        <input id="noiseColor" type="range" min="0" max="100" value="21">
+        <div class="val" id="noiseColorVal">0.21</div>
       </div>
 
       <div class="ctrl">
         <label for="noisePan">Noise pan (L ↔ R)</label>
-        <input id="noisePan" type="range" min="-100" max="100" value="0">
-        <div class="val" id="noisePanVal">0.00</div>
+        <input id="noisePan" type="range" min="-100" max="100" value="-30">
+        <div class="val" id="noisePanVal">-0.30</div>
       </div>
 
       <div class="tiny">
@@ -462,9 +462,9 @@
   }
 
   function meterLoop() {
-    const masterNow = getMasterVisualGain();
-    const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1) * masterNow;
-    const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1) * masterNow;
+    const masterNow = 1.0; // getMasterVisualGain();
+    const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1);
+    const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1);
 
     meterLevelA = meterA > meterLevelA
       ? meterLevelA + (meterA - meterLevelA) * 0.45
