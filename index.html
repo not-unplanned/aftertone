@@ -3,7 +3,7 @@
 
 <head>
   <!--
-  # notUnplanned (ɔ) 2026
+  # not-unplanned (ɔ) 2026
   # Copyleft – all rights reversed
   -->
   <meta charset="utf-8" />
@@ -17,6 +17,8 @@
   <style>
     :root {
       color-scheme: dark;
+      --title-color: #e8e8ea;
+      --title-logo-bg: #151518;
     }
 
     body {
@@ -29,6 +31,29 @@
       font-size: 18px;
       margin: 0 0 14px;
       font-weight: 650;
+      color: var(--title-color);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      line-height: 1;
+    }
+
+    .brand-logo {
+      width: 1em;
+      height: 1em;
+      display: block;
+      flex: 0 0 auto;
+    }
+
+    .brand-logo__bg {
+      fill: var(--title-logo-bg);
+    }
+
+    .brand-logo__mark {
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 10;
+      opacity: 0.72;
     }
 
     .row {
@@ -136,7 +161,20 @@
 </head>
 
 <body>
-  <h1>aftertone</h1>
+  <h1>
+    <svg class="brand-logo" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+      <rect class="brand-logo__bg" width="60" height="60" x="0" y="0" rx="0" ry="0" />
+      <!-- see https://css-tricks.com/svg-path-syntax-illustrated-guide/ -->
+      <path class="brand-logo__mark" d="M10,40 
+           l0,-20
+           c0,-15 20,-15 20,0 
+           l0,20
+           c0,15 20,15 20,0 
+           l0,-20
+           " />
+    </svg>
+    aftertone
+  </h1>
 
   <div class="bar">
     <button id="toggle">Start</button>
@@ -1254,14 +1292,16 @@
             ui.exportTrack.textContent = `Encoding ${pct}%...`;
           });
 
+          const fullYear = new Date().getFullYear();
+
           ui.exportTrack.textContent = "Tagging...";
           const taggedMp3 = addId3Tags(mp3Bytes, ID3Writer, {
             title: "aftertone",
             track: exportSeed,
             artist: "not-unplanned",
             album: "aftertone exports",
-            year: new Date().getFullYear(),
-            comment: `https://not-unplanned.github.io/aftertone/; seed=${exportSeed};`,
+            year: fullYear,
+            comment: `https://not-unplanned.github.io/aftertone/; (ɔ) ${fullYear} Copyleft – all rights reversed; seed=${exportSeed};`,
             artworkBytes,
           });
 
