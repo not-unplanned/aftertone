@@ -500,22 +500,22 @@
         lpNode.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
       }
 
-      function playNote(targetBus, freq, amp, durSeconds, bright01, profile = {}) {
+      function playNoteAtTime(audioCtx, targetBus, startTime, freq, amp, durSeconds, bright01, profile = {}) {
         // A gentle tonal voice: triangle + very light FM shimmer.
-        const t0 = ctx.currentTime;
+        const t0 = startTime;
         const t1 = t0 + durSeconds;
 
-        const carrier = ctx.createOscillator();
+        const carrier = audioCtx.createOscillator();
         carrier.type = profile.waveform || "triangle";
         carrier.frequency.setValueAtTime(freq, t0);
 
-        const mod = ctx.createOscillator();
+        const mod = audioCtx.createOscillator();
         mod.type = "sine";
         const modMinHz = profile.modMinHz ?? 0.12;
         const modSpanHz = profile.modSpanHz ?? 0.35;
         mod.frequency.setValueAtTime(modMinHz + random01() * modSpanHz, t0); // ultra-slow
 
-        const modGain = ctx.createGain();
+        const modGain = audioCtx.createGain();
         // tiny FM index, scaled a bit by brightness
         const shimmerScale = profile.shimmerScale ?? 1;
         modGain.gain.setValueAtTime(((0.4 + bright01 * 1.2) * (random01() < 0.5 ? 1 : 0.7)) * shimmerScale, t0);
@@ -524,7 +524,7 @@
         mod.connect(modGain);
         modGain.connect(carrier.frequency);
 
-        const vca = ctx.createGain();
+        const vca = audioCtx.createGain();
         vca.gain.setValueAtTime(0, t0);
 
         // Long, soft envelope
@@ -607,7 +607,7 @@
           // 0 => ~30s gap, 1 => ~7s gap.
           const d = voiceState.density;
           const meanGap = (30 - d * 23) * (profile.gapScale ?? 1);
-          const gapMs = expRand(meanGap) * 1000;
+          const gapSeconds = expRand(meanGap);
 
           const bright = voiceState.brightness;
           const freq = pick();
@@ -622,37 +622,46 @@
           const dur = minDur + random01() * Math.max(0.1, (maxDur - minDur));
 
           return {
-            waitMs: gapMs,
+            waitSeconds: gapSeconds,
             note: { freq, amp, dur, bright },
           };
         };
       }
 
-      function renderComposedNote(targetBus, note, profile = {}) {
-        playNote(targetBus, note.freq, note.amp, note.dur, note.bright, profile);
+      function createTimedNoteRenderer(audioCtx, targetBus, profile = {}) {
+        return function renderNoteAtTime(noteStartTime, note) {
+          playNoteAtTime(audioCtx, targetBus, noteStartTime, note.freq, note.amp, note.dur, note.bright, profile);
+        };
       }
 
-      async function schedulerLoop(abortToken, getVoiceState, targetBus, profile = {}) {
+      async function schedulerLoop(abortToken, audioCtx, getVoiceState, renderNoteAtTime, profile = {}) {
         const composeNextEvent = createVoiceComposer(profile);
+        let nextNoteAt = null;
 
         while (!abortToken.aborted) {
-          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
+          while (!abortToken.aborted && (isPaused || isPausing || (audioCtx && audioCtx.state === "suspended"))) {
             await sleep(120);
           }
           if (abortToken.aborted) break;
+          if (!audioCtx || audioCtx.state === "closed") break;
 
           const voiceState = getVoiceState();
           const event = composeNextEvent(voiceState);
+          if (nextNoteAt === null) nextNoteAt = audioCtx.currentTime;
+          nextNoteAt += event.waitSeconds;
 
-          // JS timers are not sample-accurate; this is fine for ambient/event-driven phrasing.
-          await sleep(event.waitMs);
+          // JS timers are not sample-accurate; we keep an absolute target time per voice.
+          const waitMs = Math.max(0, (nextNoteAt - audioCtx.currentTime) * 1000);
+          await sleep(waitMs);
           if (abortToken.aborted) break;
-          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
+          while (!abortToken.aborted && (isPaused || isPausing || (audioCtx && audioCtx.state === "suspended"))) {
             await sleep(120);
           }
           if (abortToken.aborted) break;
+          if (!audioCtx || audioCtx.state === "closed") break;
 
-          renderComposedNote(targetBus, event.note, profile);
+          const noteStartTime = Math.max(nextNoteAt, audioCtx.currentTime);
+          renderNoteAtTime(noteStartTime, event.note);
         }
       }
 
@@ -875,8 +884,10 @@
         // start schedulers
         schedulerAbortA = { aborted: false };
         schedulerAbortB = { aborted: false };
-        schedulerLoop(schedulerAbortA, () => liveConfig.voices.a, musicA.musicBus, voiceA);
-        schedulerLoop(schedulerAbortB, () => liveConfig.voices.b, musicB.musicBus, voiceB);
+        const renderVoiceA = createTimedNoteRenderer(ctx, musicA.musicBus, voiceA);
+        const renderVoiceB = createTimedNoteRenderer(ctx, musicB.musicBus, voiceB);
+        schedulerLoop(schedulerAbortA, ctx, () => liveConfig.voices.a, renderVoiceA, voiceA);
+        schedulerLoop(schedulerAbortB, ctx, () => liveConfig.voices.b, renderVoiceB, voiceB);
         scheduleMusicNudges();
 
         masterGain.gain.cancelScheduledValues(ctx.currentTime);
