@@ -284,6 +284,10 @@
 
         const nudgeA = () => {
           if (!ctx || !running || !musicA) return;
+          if (isPaused || isPausing) {
+            modTimers.push(setTimeout(nudgeA, 2000));
+            return;
+          }
           const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
           musicBrightOffsetA = clamp(musicBrightOffsetA + delta, -OFFSET_MAX, OFFSET_MAX);
           const base = r01(ui.brightness.value);
@@ -294,6 +298,10 @@
 
         const nudgeB = () => {
           if (!ctx || !running || !musicB) return;
+          if (isPaused || isPausing) {
+            modTimers.push(setTimeout(nudgeB, 2000));
+            return;
+          }
           const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
           musicBrightOffsetB = clamp(musicBrightOffsetB + delta, -OFFSET_MAX, OFFSET_MAX);
           const base = r01(ui.brightness2.value);
@@ -311,7 +319,10 @@
       let ctx = null;
       let running = false;
       let isStopping = false;
+      let isPausing = false;
+      let isPaused = false;
       const FADE_IN_SEC = 2.0;
+      const FADE_PAUSE_SEC = 1.0;
       const FADE_OUT_SEC = 3.0;
       let masterFade = null;
       let lastMasterVisual = 0;
@@ -530,6 +541,11 @@
         const pick = makeNotePicker(profile.baseMidi ?? 48);
 
         while (!abortToken.aborted) {
+          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
+            await sleep(120);
+          }
+          if (abortToken.aborted) break;
+
           // Density maps to mean gap seconds:
           // 0 => ~30s gap, 1 => ~7s gap.
           const d = r01(controls.density.value);
@@ -538,6 +554,10 @@
           // JS timers are not sample-accurate; this is fine for ambient/event-driven phrasing.
           const gap = expRand(meanGap);
           await sleep(gap * 1000);
+          if (abortToken.aborted) break;
+          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
+            await sleep(120);
+          }
           if (abortToken.aborted) break;
 
           const bright = r01(controls.brightness.value);
@@ -557,6 +577,47 @@
       }
 
       function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+      function setPlaybackState(state) {
+        if (!("mediaSession" in navigator)) return;
+        try {
+          navigator.mediaSession.playbackState = state;
+        } catch { }
+      }
+
+      function setupMediaSession() {
+        if (!("mediaSession" in navigator)) return;
+
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: "aftertone",
+            artist: "notUnplanned",
+            album: "Ambient generator",
+          });
+        } catch { }
+
+        const bindAction = (action, handler) => {
+          try {
+            navigator.mediaSession.setActionHandler(action, handler);
+          } catch { }
+        };
+
+        bindAction("play", async () => {
+          if (!running) {
+            await start();
+            return;
+          }
+          if (isPaused || (ctx && ctx.state === "suspended")) await resume();
+        });
+
+        bindAction("pause", async () => {
+          await pause();
+        });
+
+        bindAction("stop", async () => {
+          await stop();
+        });
+      }
 
       function setLedLevel(node, amount01) {
         if (!node) return;
@@ -749,13 +810,70 @@
         masterGain.gain.linearRampToValueAtTime(r01(ui.master.value), ctx.currentTime + FADE_IN_SEC);
 
         running = true;
+        isPaused = false;
+        isPausing = false;
+        setPlaybackState("playing");
         ui.toggle.textContent = "Stop";
+        ui.status.textContent = "Running";
+      }
+
+      async function pause() {
+        if (!running || isStopping || isPausing || isPaused) return;
+        if (!ctx || !masterGain) return;
+
+        isPausing = true;
+        ui.status.textContent = "Pausing...";
+
+        const pauseTime = ctx.currentTime;
+        masterFade = {
+          from: getMasterVisualGain(),
+          to: 0,
+          startedAt: performance.now(),
+          durationMs: FADE_PAUSE_SEC * 1000,
+        };
+
+        masterGain.gain.cancelScheduledValues(pauseTime);
+        masterGain.gain.setValueAtTime(Math.max(0.0001, masterGain.gain.value), pauseTime);
+        masterGain.gain.linearRampToValueAtTime(0.0001, pauseTime + FADE_PAUSE_SEC);
+        await sleep((FADE_PAUSE_SEC + 0.05) * 1000);
+
+        if (ctx.state === "running") {
+          try { await ctx.suspend(); } catch { }
+        }
+
+        isPaused = true;
+        isPausing = false;
+        setPlaybackState("paused");
+        ui.status.textContent = "Paused";
+      }
+
+      async function resume() {
+        if (!running || isStopping || isPausing || !isPaused) return;
+        if (!ctx || !masterGain) return;
+
+        try { await ctx.resume(); } catch { }
+
+        const resumeTime = ctx.currentTime;
+        masterFade = {
+          from: 0,
+          to: r01(ui.master.value),
+          startedAt: performance.now(),
+          durationMs: FADE_PAUSE_SEC * 1000,
+        };
+
+        masterGain.gain.cancelScheduledValues(resumeTime);
+        masterGain.gain.setValueAtTime(0.0001, resumeTime);
+        masterGain.gain.linearRampToValueAtTime(r01(ui.master.value), resumeTime + FADE_PAUSE_SEC);
+
+        isPaused = false;
+        setPlaybackState("playing");
         ui.status.textContent = "Running";
       }
 
       async function stop() {
         if (!running || isStopping) return;
         isStopping = true;
+        isPausing = false;
         ui.toggle.textContent = "Stopping...";
         ui.status.textContent = "Stopping...";
 
@@ -771,7 +889,7 @@
         schedulerAbortB.aborted = true;
         stopAllMusicNudges();
 
-        if (ctx && masterGain) {
+        if (ctx && masterGain && !isPaused) {
           const stopTime = ctx.currentTime;
           masterGain.gain.cancelScheduledValues(stopTime);
           masterGain.gain.setValueAtTime(Math.max(0.0001, masterGain.gain.value), stopTime);
@@ -792,7 +910,9 @@
         setLedLevel(ui.noiseLed, 0);
         setLedLevel(ui.musicLedA, 0);
         setLedLevel(ui.musicLedB, 0);
+        setPlaybackState("none");
         isStopping = false;
+        isPaused = false;
 
         running = false;
         ui.toggle.textContent = "Start";
@@ -816,6 +936,7 @@
       function bind() {
         refreshUI();
         meterLoop();
+        setupMediaSession();
 
         ui.toggle.addEventListener("click", async () => {
           if (!running) await start();

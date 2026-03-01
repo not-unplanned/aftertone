@@ -129,7 +129,22 @@ Stop sequence:
 
 Closing the context is important for releasing hardware resources and preventing orphaned audio processing.
 
-## 8) Web Audio API gotchas to remember
+## 8) Media Session and hardware play/pause keys
+
+aftertone now registers a browser Media Session so OS media keys can target the page.
+
+- `play` action resumes playback (or starts if not running).
+- `pause` action performs a **1 second master fade-down** and then suspends the `AudioContext`.
+- `resume` performs a **1 second fade-up** back to current master volume.
+- `stop` still performs full teardown (`close()`), which is different from pause/suspend.
+
+Why this matters:
+
+- Hardware play/pause keys on Windows 11 and macOS are generally routed through OS-level media sessions, not normal JS keyboard events.
+- Using `suspend()` for pause avoids abrupt noise cutoff clicks and keeps graph state alive for fast resume.
+- Scheduler and modulation loops are pause-aware so they do not accumulate note events while suspended.
+
+## 9) Web Audio API gotchas to remember
 
 - **User gesture requirement**: context creation/resume must happen after user interaction in most browsers.
 - **Automation smoothing**: direct `.value` jumps can click; `setTargetAtTime` is safer for live controls.
@@ -137,7 +152,7 @@ Closing the context is important for releasing hardware resources and preventing
 - **Worklet loading**: `audioWorklet.addModule()` is async and must resolve before node creation.
 - **Timer precision**: JS timers are coarse compared with audio sample clocks; use look-ahead schedulers if tighter rhythm is needed.
 
-## 9) Reuse guidance for future projects
+## 10) Reuse guidance for future projects
 
 Good patterns to carry forward:
 
