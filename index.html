@@ -140,11 +140,8 @@
 
   <div class="bar">
     <button id="toggle">Start</button>
-    <button id="exportTrack">Export 864s MP3</button>
     <div class="status" id="status">Stopped</div>
   </div>
-
-  <div class="tiny">Export renders an 864 second MP3 snapshot with tags and artwork. This can take a minute.</div>
 
   <div class="row">
     <div class="card">
@@ -157,6 +154,12 @@
       <div class="tiny">
         Tip: Keep master low, then bring up Noise/Music. Sparse stuff sounds “wrong” if it’s loud.
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Download</h2>
+      <button id="exportTrack">Export 864s MP3</button>
+      <div class="tiny">Export renders an 864 second MP3 snapshot with tags and artwork. This can take a minute.</div>
     </div>
 
     <div class="card">
@@ -206,12 +209,13 @@
         <div class="val" id="brightnessVal">0.35</div>
       </div>
 
-
+      <div class="tiny">
+        It's A minor pentatonic with weighted step movement + Poisson timing. Quiet on purpose.
+      </div>
     </div>
   </div>
 
   <div class="row">
-
     <div class="card">
       <h2><span class="led" id="musicLedB" aria-hidden="true"></span>Tonal generator B</h2>
       <div class="ctrl">
@@ -235,9 +239,6 @@
       <div class="tiny">
         Tuned as a lighter upper voice with longer tails. Offset from A for call-and-response motion.
       </div>
-    </div>
-    <div class="tiny">
-      It's A minor pentatonic with weighted step movement + Poisson timing. Quiet on purpose.
     </div>
   </div>
 
