@@ -199,13 +199,14 @@
       <button id="exportTrack">Export 864s MP3</button>
       <div class="tiny">Export renders an 864 second MP3 snapshot with tags and artwork. This can take a minute.</div>
     </div>
-
+  </div>
+  <div class="row">
     <div class="card">
       <h2><span class="led" id="noiseLed" aria-hidden="true"></span>Noise masker</h2>
       <div class="ctrl">
         <label for="noiseVol">Noise volume</label>
-        <input id="noiseVol" type="range" min="0" max="10" value="1">
-        <div class="val" id="noiseVolVal">0.01</div>
+        <input id="noiseVol" type="range" min="0.0" max="100" value="1">
+        <div class="val" id="noiseVolVal">0.02</div>
       </div>
 
       <div class="ctrl">
@@ -434,7 +435,7 @@
         return {
           master: r01(ui.master.value),
           noise: {
-            volume: r01(ui.noiseVol.value),
+            volume: clamp(r01(ui.noiseVol.value), 0.01, 1.00),
             color: r01(ui.noiseColor.value),
             pan: ui.noisePan.value / 100,
           },
