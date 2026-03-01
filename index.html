@@ -722,7 +722,7 @@
         mod.frequency.setValueAtTime(0.05, t0);
 
         const modDepth = ctx.createGain();
-        modDepth.gain.setValueAtTime(0.003, t0);
+        modDepth.gain.setValueAtTime(0.002, t0);
 
         mod.connect(modDepth);
         modDepth.connect(noiseGain.gain);
