@@ -257,8 +257,38 @@
         musicLedB: $("musicLedB"),
       };
 
+      let liveConfig = null;
+
       function r01(x) { return x / 100; }
       function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+      function getEngineConfigFromUI(ui) {
+        return {
+          master: r01(ui.master.value),
+          noise: {
+            volume: r01(ui.noiseVol.value),
+            color: r01(ui.noiseColor.value),
+            pan: ui.noisePan.value / 100,
+          },
+          voices: {
+            a: {
+              musicVol: r01(ui.musicVol.value),
+              density: r01(ui.density.value),
+              brightness: r01(ui.brightness.value),
+            },
+            b: {
+              musicVol: r01(ui.musicVol2.value),
+              density: r01(ui.density2.value),
+              brightness: r01(ui.brightness2.value),
+            },
+          },
+        };
+      }
+
+      function refreshLiveConfig() {
+        liveConfig = getEngineConfigFromUI(ui);
+        return liveConfig;
+      }
 
       // ---------- Event-based modulation (music only) ----------
       // Goal: tiny, occasional parameter nudges to keep the tonal voices alive,
@@ -290,7 +320,7 @@
           }
           const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
           musicBrightOffsetA = clamp(musicBrightOffsetA + delta, -OFFSET_MAX, OFFSET_MAX);
-          const base = r01(ui.brightness.value);
+          const base = liveConfig.voices.a.brightness;
           applyMusicBrightness(clamp(base + musicBrightOffsetA, 0, 1), musicA.musicLP);
           const nextMs = Math.floor(randBetween(12000, 38000));
           modTimers.push(setTimeout(nudgeA, nextMs));
@@ -304,7 +334,7 @@
           }
           const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
           musicBrightOffsetB = clamp(musicBrightOffsetB + delta, -OFFSET_MAX, OFFSET_MAX);
-          const base = r01(ui.brightness2.value);
+          const base = liveConfig.voices.b.brightness;
           applyMusicBrightness(clamp(base + musicBrightOffsetB, 0, 1), musicB.musicLP);
           const nextMs = Math.floor(randBetween(15000, 45000));
           modTimers.push(setTimeout(nudgeB, nextMs));
@@ -537,7 +567,7 @@
         return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix, analyser, meterData };
       }
 
-      async function schedulerLoop(abortToken, controls, targetBus, profile = {}) {
+      async function schedulerLoop(abortToken, getVoiceState, targetBus, profile = {}) {
         const pick = makeNotePicker(profile.baseMidi ?? 48);
 
         while (!abortToken.aborted) {
@@ -548,7 +578,8 @@
 
           // Density maps to mean gap seconds:
           // 0 => ~30s gap, 1 => ~7s gap.
-          const d = r01(controls.density.value);
+          const voiceState = getVoiceState();
+          const d = voiceState.density;
           const meanGap = (30 - d * 23) * (profile.gapScale ?? 1);
 
           // JS timers are not sample-accurate; this is fine for ambient/event-driven phrasing.
@@ -560,11 +591,11 @@
           }
           if (abortToken.aborted) break;
 
-          const bright = r01(controls.brightness.value);
+          const bright = voiceState.brightness;
           const freq = pick();
 
           // Quiet amplitude by design; scaled by Music volume.
-          const musicVol = r01(controls.musicVol.value);
+          const musicVol = voiceState.musicVol;
           const amp = ((0.012 + Math.random() * 0.02) * (0.25 + musicVol * 0.95)) * (profile.ampScale ?? 1);
 
           // Long durations: 5–18 sec
@@ -657,13 +688,13 @@
           return 0;
         }
 
-        lastMasterVisual = r01(ui.master.value);
+        lastMasterVisual = liveConfig.master;
         return lastMasterVisual;
       }
 
       function meterLoop() {
         const masterNow = 1.0; // getMasterVisualGain();
-        const noiseLevel = clamp((r01(ui.noiseVol.value) - 0.004) / 0.09, 0, 1);
+        const noiseLevel = clamp((liveConfig.noise.volume - 0.004) / 0.09, 0, 1);
         const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1);
         const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1);
 
@@ -694,6 +725,7 @@
       // ---------- Start/Stop ----------
       async function start() {
         if (running || isStopping) return;
+        refreshLiveConfig();
 
         // Must be created in a user gesture (button click) on modern browsers.
         // If auto-starting from elsewhere, call ctx.resume() after user interaction.
@@ -706,14 +738,14 @@
         masterGain.connect(ctx.destination);
         masterFade = {
           from: 0,
-          to: r01(ui.master.value),
+          to: liveConfig.master,
           startedAt: performance.now(),
           durationMs: FADE_IN_SEC * 1000,
         };
 
         // Noise chain
         noiseGain = ctx.createGain();
-        noiseGain.gain.value = r01(ui.noiseVol.value);
+        noiseGain.gain.value = liveConfig.noise.volume;
 
         const t0 = ctx.currentTime;
 
@@ -729,7 +761,7 @@
         mod.start(t0);
 
         noisePan = ctx.createStereoPanner();
-        noisePan.pan.value = ui.noisePan.value / 100;
+        noisePan.pan.value = liveConfig.noise.pan;
 
         noiseTilt = ctx.createBiquadFilter();
         noiseTilt.type = "highshelf";
@@ -782,32 +814,24 @@
         };
 
         // Music chains
-        musicA = buildMusicChain(r01(ui.musicVol.value), voiceA);
-        musicB = buildMusicChain(r01(ui.musicVol2.value), voiceB);
+        musicA = buildMusicChain(liveConfig.voices.a.musicVol, voiceA);
+        musicB = buildMusicChain(liveConfig.voices.b.musicVol, voiceB);
 
         // apply initial params
-        applyNoiseColor(r01(ui.noiseColor.value));
-        applyMusicBrightness(clamp(r01(ui.brightness.value) + musicBrightOffsetA, 0, 1), musicA.musicLP);
-        applyMusicBrightness(clamp(r01(ui.brightness2.value) + musicBrightOffsetB, 0, 1), musicB.musicLP);
+        applyNoiseColor(liveConfig.noise.color);
+        applyMusicBrightness(clamp(liveConfig.voices.a.brightness + musicBrightOffsetA, 0, 1), musicA.musicLP);
+        applyMusicBrightness(clamp(liveConfig.voices.b.brightness + musicBrightOffsetB, 0, 1), musicB.musicLP);
 
         // start schedulers
         schedulerAbortA = { aborted: false };
         schedulerAbortB = { aborted: false };
-        schedulerLoop(schedulerAbortA, {
-          density: ui.density,
-          musicVol: ui.musicVol,
-          brightness: ui.brightness,
-        }, musicA.musicBus, voiceA);
-        schedulerLoop(schedulerAbortB, {
-          density: ui.density2,
-          musicVol: ui.musicVol2,
-          brightness: ui.brightness2,
-        }, musicB.musicBus, voiceB);
+        schedulerLoop(schedulerAbortA, () => liveConfig.voices.a, musicA.musicBus, voiceA);
+        schedulerLoop(schedulerAbortB, () => liveConfig.voices.b, musicB.musicBus, voiceB);
         scheduleMusicNudges();
 
         masterGain.gain.cancelScheduledValues(ctx.currentTime);
         masterGain.gain.setValueAtTime(0, ctx.currentTime);
-        masterGain.gain.linearRampToValueAtTime(r01(ui.master.value), ctx.currentTime + FADE_IN_SEC);
+        masterGain.gain.linearRampToValueAtTime(liveConfig.master, ctx.currentTime + FADE_IN_SEC);
 
         running = true;
         isPaused = false;
@@ -856,14 +880,14 @@
         const resumeTime = ctx.currentTime;
         masterFade = {
           from: 0,
-          to: r01(ui.master.value),
+          to: liveConfig.master,
           startedAt: performance.now(),
           durationMs: FADE_PAUSE_SEC * 1000,
         };
 
         masterGain.gain.cancelScheduledValues(resumeTime);
         masterGain.gain.setValueAtTime(0.0001, resumeTime);
-        masterGain.gain.linearRampToValueAtTime(r01(ui.master.value), resumeTime + FADE_PAUSE_SEC);
+        masterGain.gain.linearRampToValueAtTime(liveConfig.master, resumeTime + FADE_PAUSE_SEC);
 
         isPaused = false;
         setPlaybackState("playing");
@@ -921,16 +945,17 @@
 
       // ---------- UI wiring ----------
       function refreshUI() {
-        setVal("masterVal", r01(ui.master.value));
-        setVal("noiseVolVal", r01(ui.noiseVol.value));
-        setVal("noiseColorVal", r01(ui.noiseColor.value));
-        setVal("noisePanVal", ui.noisePan.value / 100);
-        setVal("musicVolVal", r01(ui.musicVol.value));
-        setVal("densityVal", r01(ui.density.value));
-        setVal("brightnessVal", r01(ui.brightness.value));
-        setVal("musicVol2Val", r01(ui.musicVol2.value));
-        setVal("density2Val", r01(ui.density2.value));
-        setVal("brightness2Val", r01(ui.brightness2.value));
+        const cfg = refreshLiveConfig();
+        setVal("masterVal", cfg.master);
+        setVal("noiseVolVal", cfg.noise.volume);
+        setVal("noiseColorVal", cfg.noise.color);
+        setVal("noisePanVal", cfg.noise.pan);
+        setVal("musicVolVal", cfg.voices.a.musicVol);
+        setVal("densityVal", cfg.voices.a.density);
+        setVal("brightnessVal", cfg.voices.a.brightness);
+        setVal("musicVol2Val", cfg.voices.b.musicVol);
+        setVal("density2Val", cfg.voices.b.density);
+        setVal("brightness2Val", cfg.voices.b.brightness);
       }
 
       function bind() {
@@ -946,32 +971,32 @@
         ui.master.addEventListener("input", () => {
           refreshUI();
           if (isStopping) return;
-          if (ctx && masterGain) masterGain.gain.setTargetAtTime(r01(ui.master.value), ctx.currentTime, 0.05);
+          if (ctx && masterGain) masterGain.gain.setTargetAtTime(liveConfig.master, ctx.currentTime, 0.05);
         });
 
         ui.noiseVol.addEventListener("input", () => {
           refreshUI();
-          if (ctx && noiseGain) noiseGain.gain.setTargetAtTime(r01(ui.noiseVol.value), ctx.currentTime, 0.05);
+          if (ctx && noiseGain) noiseGain.gain.setTargetAtTime(liveConfig.noise.volume, ctx.currentTime, 0.05);
         });
 
         ui.noisePan.addEventListener("input", () => {
           refreshUI();
-          if (ctx && noisePan) noisePan.pan.setTargetAtTime(ui.noisePan.value / 100, ctx.currentTime, 0.05);
+          if (ctx && noisePan) noisePan.pan.setTargetAtTime(liveConfig.noise.pan, ctx.currentTime, 0.05);
         });
 
         ui.noiseColor.addEventListener("input", () => {
           refreshUI();
-          if (ctx && noiseLP && noiseTilt) applyNoiseColor(r01(ui.noiseColor.value));
+          if (ctx && noiseLP && noiseTilt) applyNoiseColor(liveConfig.noise.color);
         });
 
         ui.musicVol.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicA) musicA.musicGain.gain.setTargetAtTime(r01(ui.musicVol.value), ctx.currentTime, 0.06);
+          if (ctx && musicA) musicA.musicGain.gain.setTargetAtTime(liveConfig.voices.a.musicVol, ctx.currentTime, 0.06);
         });
 
         ui.brightness.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicA) applyMusicBrightness(clamp(r01(ui.brightness.value) + musicBrightOffsetA, 0, 1), musicA.musicLP);
+          if (ctx && musicA) applyMusicBrightness(clamp(liveConfig.voices.a.brightness + musicBrightOffsetA, 0, 1), musicA.musicLP);
         });
 
         // density only affects scheduling, so no node updates needed.
@@ -979,12 +1004,12 @@
 
         ui.musicVol2.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicB) musicB.musicGain.gain.setTargetAtTime(r01(ui.musicVol2.value), ctx.currentTime, 0.06);
+          if (ctx && musicB) musicB.musicGain.gain.setTargetAtTime(liveConfig.voices.b.musicVol, ctx.currentTime, 0.06);
         });
 
         ui.brightness2.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicB) applyMusicBrightness(clamp(r01(ui.brightness2.value) + musicBrightOffsetB, 0, 1), musicB.musicLP);
+          if (ctx && musicB) applyMusicBrightness(clamp(liveConfig.voices.b.brightness + musicBrightOffsetB, 0, 1), musicB.musicLP);
         });
 
         // density2 only affects scheduling, so no node updates needed.
