@@ -599,29 +599,15 @@
         return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix, analyser, meterData };
       }
 
-      async function schedulerLoop(abortToken, getVoiceState, targetBus, profile = {}) {
+      function createVoiceComposer(profile = {}) {
         const pick = makeNotePicker(profile.baseMidi ?? 48);
 
-        while (!abortToken.aborted) {
-          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
-            await sleep(120);
-          }
-          if (abortToken.aborted) break;
-
+        return function composeNextEvent(voiceState) {
           // Density maps to mean gap seconds:
           // 0 => ~30s gap, 1 => ~7s gap.
-          const voiceState = getVoiceState();
           const d = voiceState.density;
           const meanGap = (30 - d * 23) * (profile.gapScale ?? 1);
-
-          // JS timers are not sample-accurate; this is fine for ambient/event-driven phrasing.
-          const gap = expRand(meanGap);
-          await sleep(gap * 1000);
-          if (abortToken.aborted) break;
-          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
-            await sleep(120);
-          }
-          if (abortToken.aborted) break;
+          const gapMs = expRand(meanGap) * 1000;
 
           const bright = voiceState.brightness;
           const freq = pick();
@@ -635,7 +621,38 @@
           const maxDur = profile.maxDur ?? 18;
           const dur = minDur + random01() * Math.max(0.1, (maxDur - minDur));
 
-          playNote(targetBus, freq, amp, dur, bright, profile);
+          return {
+            waitMs: gapMs,
+            note: { freq, amp, dur, bright },
+          };
+        };
+      }
+
+      function renderComposedNote(targetBus, note, profile = {}) {
+        playNote(targetBus, note.freq, note.amp, note.dur, note.bright, profile);
+      }
+
+      async function schedulerLoop(abortToken, getVoiceState, targetBus, profile = {}) {
+        const composeNextEvent = createVoiceComposer(profile);
+
+        while (!abortToken.aborted) {
+          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
+            await sleep(120);
+          }
+          if (abortToken.aborted) break;
+
+          const voiceState = getVoiceState();
+          const event = composeNextEvent(voiceState);
+
+          // JS timers are not sample-accurate; this is fine for ambient/event-driven phrasing.
+          await sleep(event.waitMs);
+          if (abortToken.aborted) break;
+          while (!abortToken.aborted && (isPaused || isPausing || (ctx && ctx.state === "suspended"))) {
+            await sleep(120);
+          }
+          if (abortToken.aborted) break;
+
+          renderComposedNote(targetBus, event.note, profile);
         }
       }
 
