@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -ex
 
 rm -rf docs/*
 for F in index.html *.ico *.png 
