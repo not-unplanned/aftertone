@@ -35,3 +35,4 @@ Use this checklist after refactors that touch scheduling, gain staging, or UI wi
 - [ ] Leave running for 5+ minutes: no runaway CPU symptoms, no lockups.
 - [ ] Stop while notes are active: fade-out remains smooth.
 - [ ] Reload page and verify defaults are restored.
+- [ ] Run `node generation-regression-check.cjs` and confirm it passes.

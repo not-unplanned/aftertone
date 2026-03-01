@@ -1,10 +1,10 @@
 # aftertone Technical Description
 
-This document explains the `index.html` implementation used by aftertone, with a focus on structure, Web Audio graph design, and API behaviors that matter when reusing this pattern in future projects.
+This document explains the current `index.html` implementation used by aftertone, with a focus on structure, Web Audio graph design, scheduling behavior, and reuse patterns for future work (including offline/export paths).
 
 ## 1) High-level architecture
 
-The app is a single-page, no-build Web Audio instrument with three sound sources:
+aftertone is a single-page, no-build Web Audio instrument with three sound sources:
 
 - A **noise masker** (stereo noise + tone shaping).
 - **Tonal generator A** (slow, sparse generative notes).
@@ -12,18 +12,18 @@ The app is a single-page, no-build Web Audio instrument with three sound sources
 
 All sources are mixed into a shared `masterGain` and then routed to `AudioContext.destination`.
 
-The script is wrapped in an IIFE so the entire state stays private and avoids globals.
+The script is wrapped in an IIFE so state remains private and no app globals leak into `window` (except optional debug diagnostics when explicitly enabled).
 
-## 2) Page structure
+## 2) Page/runtime structure
 
 `index.html` contains:
 
-- **UI controls** for master, noise, and two tonal voices.
-- **Status and transport** (`Start`/`Stop`).
-- **LED meters** driven by analyser RMS values.
-- **Inline script** that owns audio graph creation, scheduling, modulation, and UI binding.
+- UI controls for master, noise, and both tonal voices.
+- Status and transport (`Start`/`Stop`) plus Media Session bindings.
+- LED meters driven by analyser RMS values.
+- Inline script that owns graph construction, composition, scheduling, modulation, and UI wiring.
 
-The UI values are normalized from slider ranges into `0..1` where practical via `r01(x)`.
+Control values are normalized from slider ranges into `0..1` where practical, then captured in a single runtime snapshot object (`liveConfig`) via `getEngineConfigFromUI(ui)`.
 
 ## 3) Audio graph overview
 
@@ -35,7 +35,7 @@ The UI values are normalized from slider ranges into `0..1` where practical via 
 [Music chain B] ---/
 ```
 
-`masterGain` is faded in/out on start/stop to avoid clicks.
+`masterGain` is faded on start/pause/resume/stop to avoid clicks.
 
 ## Noise path
 
@@ -47,119 +47,182 @@ AudioWorklet noise --> highshelf (tilt) --> lowpass --> stereo pan --> noiseGain
 
 Notes:
 
-- Noise generation is done in an `AudioWorkletProcessor` to avoid main-thread timing jitter.
-- "Color" is implemented as a lowpass cutoff + highshelf attenuation, not strict PSD-accurate white/pink/brown synthesis.
+- Noise generation runs in an `AudioWorkletProcessor` to reduce main-thread jitter impact.
+- "Color" is implemented as lowpass cutoff + highshelf attenuation, not strict PSD-accurate white/pink/brown synthesis.
 - A very slow LFO modulates `noiseGain.gain` for subtle movement.
 
 ## Music path (per voice)
 
 ```text
-playNote() -> musicBus -> lowpass -> delay -> convolver(reverb) -> reverbMix --\
-                            |                                                  +--> musicGain -> analyser -> masterGain
-                            \---------------------- dry -----------------------/
+playNoteAtTime() -> musicBus -> lowpass -> delay -> convolver(reverb) -> reverbMix --\
+                                    |                                                  +--> musicGain -> analyser -> masterGain
+                                    \---------------------- dry -----------------------/
 ```
 
 Each voice has:
 
-- A note scheduler (`schedulerLoop`) with Poisson timing.
-- A pitch picker constrained to A minor pentatonic with weighted step movement.
-- A custom profile (base pitch, duration ranges, FX levels, detune, shimmer).
+- A composition function (`createVoiceComposer`) that emits note events.
+- A scheduler (`schedulerLoop`) that maps events onto an absolute timeline.
+- A profile object (base pitch, duration range, FX values, detune, shimmer).
 
-Voice B is intentionally offset from Voice A (pitch center, delay/reverb, amplitude, duration), creating call-and-response texture.
+Voice B is intentionally offset from Voice A (pitch center, FX, amplitude, duration), creating call-and-response texture.
 
-## 4) Generative system details
+## 4) Composition and scheduling model
 
-## Timing model
+## Deterministic RNG layer
 
-- Inter-onset intervals use an **exponential distribution** (`expRand`) to emulate a Poisson event process.
-- `density` maps to the mean gap between notes (roughly sparse to busy).
-- Scheduling uses `setTimeout`/`sleep`, which is not sample-accurate, but acceptable for ambient macro-timing.
+- Runtime randomness is routed through `random01`.
+- `setRandomSeed(seed)` switches to a seeded RNG (`createSeededRng`).
+- Each `start()` session creates a fresh seed from `crypto.getRandomValues` (with fallback).
 
-## Pitch model
+This allows deterministic generation checks and future export parity work.
 
-- `makeNotePicker(baseMidi)` constrains to scale degrees `[0, 3, 5, 7, 10]` (A minor pentatonic intervals).
-- Weighted steps favor small motion (`-1, 0, +1`) with rarer larger steps.
-- Occasional octave drift adds slow long-term variation.
+## Composition output
 
-## Voice synthesis
+`createVoiceComposer(profile)` emits an event object:
 
-`playNote(...)` uses:
+```text
+{
+  waitSeconds,
+  note: { freq, amp, dur, bright }
+}
+```
 
-- Main oscillator (`triangle` by default, profile-overridable).
+Timing uses exponential inter-onset spacing (`expRand`) to emulate a Poisson process.
+
+## Runtime scheduler
+
+`schedulerLoop` keeps a per-voice absolute target time (`nextNoteAt`) and schedules from that reference rather than from "now".
+
+This is still JS-timer driven (ambient-appropriate, not sample-accurate), but now structurally aligned with offline rendering patterns because events are timeline-based and note rendering is time-explicit.
+
+## 5) Voice synthesis
+
+`playNoteAtTime(audioCtx, targetBus, startTime, ...)` uses:
+
+- Main oscillator (`triangle` default, profile-overridable).
 - Very slow sine modulator into carrier frequency (light FM shimmer).
-- Gain envelope with long attack/release.
+- Long attack/release gain envelope.
 - Random micro-detune.
 
-Important envelope gotcha: exponential ramps cannot target exactly `0`, so a tiny floor (`0.0001`) is used.
+Envelope note: exponential ramps cannot target exactly `0`, so a tiny floor (`0.0001`) is used.
 
-## 5) Runtime modulation layer
+## 6) Runtime modulation layer
 
-`scheduleMusicNudges()` adds occasional, bounded brightness offsets per voice:
+`scheduleMusicNudges()` adds bounded, occasional brightness drift per voice:
 
-- Offsets drift in small random steps.
-- Drift is clamped so UI value remains the primary intent.
+- Small random steps.
+- Clamped offset window so UI value remains the primary intent.
 - Timers are cleared and rebuilt safely on restart.
 
-This gives movement without continuous obvious automation.
+This keeps motion subtle without obvious continuous automation.
 
-## 6) Metering and LED feedback
+## 7) Graph adapter and lifecycle
 
-- Each music chain has an `AnalyserNode`; RMS is computed from time-domain data.
-- Meters are smoothed asymmetrically (faster rise, slower decay) for readability.
-- Noise LED level is inferred from control value (intentionally simple and stable).
+Graph construction now routes through `buildGraph(audioCtx, config)`:
 
-These LEDs are qualitative indicators, not calibrated loudness meters.
+- Builds master/noise/music chains.
+- Returns node references plus voice profiles.
+- Keeps `start()` focused on orchestration (seeding, graph build, initial params, scheduler start, fades).
 
-## 7) Start/stop lifecycle
+`buildMusicChain(audioCtx, masterBus, volume01, profile)` is now context/bus-driven instead of directly coupling to global `ctx/masterGain`.
+
+This refactor is the main foundation for future `OfflineAudioContext` reuse.
+
+## 8) Hardening and diagnostics
+
+A lightweight runtime safety layer is included:
+
+- `sanitizeVoiceState` clamps/normalizes incoming control state.
+- `finiteOr` guards against invalid numeric values.
+- Composer outputs are bounded/fallback-safe for gap, frequency, amplitude, and duration.
+
+Optional runtime diagnostics are enabled with `?debug`:
+
+- Logs session seed at start.
+- Tracks per-voice scheduler metrics (events, notes/min, amp/duration/gap ranges).
+- Logs lag warnings when scheduler lateness exceeds threshold.
+- Exposes diagnostics as `window.__aftertoneDiagnostics`.
+
+These diagnostics are opt-in and do not affect normal playback behavior.
+
+## 9) Metering and LED feedback
+
+- Each music chain has an `AnalyserNode`; RMS is computed from time-domain samples.
+- Meter smoothing is asymmetric (faster rise, slower decay).
+- Noise LED level is inferred from control value for stable visual feedback.
+
+These indicators are qualitative, not calibrated loudness meters.
+
+## 10) Start/pause/resume/stop behavior
 
 Start sequence:
 
-1. Create `AudioContext` inside user gesture.
-2. Build master, noise, and both music chains.
-3. Apply initial control values.
-4. Start schedulers and modulation nudges.
-5. Ramp master gain from 0 to user value.
+1. Snapshot normalized UI config.
+2. Seed runtime RNG.
+3. Create `AudioContext` in user gesture.
+4. Build graph via `buildGraph`.
+5. Apply initial params and start schedulers/modulation.
+6. Fade master from `0` to user value.
+
+Pause/resume:
+
+- Pause fades down then `suspend()`s context.
+- Resume `resume()`s context then fades up.
+- Scheduler and modulation loops are pause-aware.
 
 Stop sequence:
 
-1. Abort schedulers and cancel modulation timers.
+1. Abort schedulers and modulation timers.
 2. Fade master down.
 3. Close `AudioContext`.
-4. Reset runtime references and UI indicators.
+4. Reset runtime references and LEDs.
 
-Closing the context is important for releasing hardware resources and preventing orphaned audio processing.
+Closing the context is important for hardware/resource release.
 
-## 8) Media Session and hardware play/pause keys
+## 11) Media Session and hardware keys
 
-aftertone now registers a browser Media Session so OS media keys can target the page.
+aftertone registers browser Media Session handlers:
 
-- `play` action resumes playback (or starts if not running).
-- `pause` action performs a **1 second master fade-down** and then suspends the `AudioContext`.
-- `resume` performs a **1 second fade-up** back to current master volume.
-- `stop` still performs full teardown (`close()`), which is different from pause/suspend.
+- `play`: start or resume.
+- `pause`: fade then suspend.
+- `stop`: full teardown (`close()`).
 
-Why this matters:
+Why it matters:
 
-- Hardware play/pause keys on Windows 11 and macOS are generally routed through OS-level media sessions, not normal JS keyboard events.
-- Using `suspend()` for pause avoids abrupt noise cutoff clicks and keeps graph state alive for fast resume.
-- Scheduler and modulation loops are pause-aware so they do not accumulate note events while suspended.
+- OS media keys route through media sessions, not regular keyboard handlers.
+- Suspend/resume keeps graph state alive and avoids abrupt cutoff artifacts.
 
-## 9) Web Audio API gotchas to remember
+## 12) Regression tooling
 
-- **User gesture requirement**: context creation/resume must happen after user interaction in most browsers.
-- **Automation smoothing**: direct `.value` jumps can click; `setTargetAtTime` is safer for live controls.
-- **Convolver cost**: IR length/decay increases CPU usage; keep modest defaults for browser reliability.
-- **Worklet loading**: `audioWorklet.addModule()` is async and must resolve before node creation.
-- **Timer precision**: JS timers are coarse compared with audio sample clocks; use look-ahead schedulers if tighter rhythm is needed.
+`generation-regression-check.cjs` provides deterministic generation checks:
 
-## 10) Reuse guidance for future projects
+- Verifies same seed -> identical event sequence.
+- Verifies different seeds -> different sequence.
+- Validates generated value ranges and approximate density/amplitude envelopes.
+
+`testing-checklist.md` includes this command as part of regression pass:
+
+```bash
+node generation-regression-check.cjs
+```
+
+## 13) Web Audio API gotchas to remember
+
+- User gesture is required for context create/resume on most browsers.
+- `setTargetAtTime`/automation smoothing is safer than hard parameter jumps.
+- Convolver IR size directly impacts CPU.
+- `audioWorklet.addModule()` is async and must complete before node creation.
+- JS timers are coarse vs audio clocks; this architecture intentionally accepts that for ambient timing.
+
+## 14) Reuse guidance
 
 Good patterns to carry forward:
 
-- Keep graph construction in small composable builders (`buildMusicChain`, `playNote`, etc.).
-- Separate UI normalization from DSP logic.
-- Use profile objects for voice variants instead of duplicating code.
-- Build explicit start/stop lifecycles with fades and cleanup.
-- Add lightweight metering/visual feedback to make tuning easier.
+- Keep graph builders composable and context-injected (`buildGraph`, `buildMusicChain`).
+- Keep composition data-oriented (`waitSeconds` + note payload).
+- Keep rendering time-explicit (`playNoteAtTime`).
+- Keep runtime config normalized and centralized.
+- Keep diagnostics optional and low overhead.
 
-If you later need stricter rhythm or sequencing, keep this structure and replace `schedulerLoop` with a look-ahead scheduler driven by `AudioContext.currentTime`.
+For stricter timing or export rendering, this structure can be extended with an offline timeline renderer that consumes the same event composition layer.
