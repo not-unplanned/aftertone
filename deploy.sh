@@ -2,7 +2,7 @@
 set -ex
 
 rm -rf docs/*
-for F in index.html *.ico *.png 
+for F in index.html *.ico *.png LICENSE
 do
   cp "$F" ./docs/
 done
