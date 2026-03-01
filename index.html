@@ -552,32 +552,32 @@
         carrier.stop(t1 + 0.05);
       }
 
-      function buildMusicChain(volume01, profile = {}) {
-        const musicGain = ctx.createGain();
+      function buildMusicChain(audioCtx, masterBus, volume01, profile = {}) {
+        const musicGain = audioCtx.createGain();
         musicGain.gain.value = volume01;
 
-        const musicBus = ctx.createGain();
+        const musicBus = audioCtx.createGain();
 
-        const musicLP = ctx.createBiquadFilter();
+        const musicLP = audioCtx.createBiquadFilter();
         musicLP.type = "lowpass";
         musicLP.Q.value = profile.filterQ ?? 0.35;
 
         // delay
-        const delay = ctx.createDelay(2.0);
+        const delay = audioCtx.createDelay(2.0);
         delay.delayTime.value = profile.delayTime ?? 0.42;
-        const delayFB = ctx.createGain();
+        const delayFB = audioCtx.createGain();
         delayFB.gain.value = profile.delayFeedback ?? 0.22;
         delay.connect(delayFB);
         delayFB.connect(delay);
 
         // reverb
-        const reverb = ctx.createConvolver();
-        reverb.buffer = makeReverbIR(ctx, 2.6, 2.4);
+        const reverb = audioCtx.createConvolver();
+        reverb.buffer = makeReverbIR(audioCtx, 2.6, 2.4);
 
-        const reverbMix = ctx.createGain();
+        const reverbMix = audioCtx.createGain();
         reverbMix.gain.value = profile.reverbMix ?? 0.26;
 
-        const analyser = ctx.createAnalyser();
+        const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 1024;
         analyser.smoothingTimeConstant = 0.78;
         const meterData = new Float32Array(analyser.fftSize);
@@ -594,9 +594,100 @@
         reverbMix.connect(musicGain);
 
         musicGain.connect(analyser);
-        analyser.connect(masterGain);
+        analyser.connect(masterBus);
 
         return { musicGain, musicBus, musicLP, delay, delayFB, reverb, reverbMix, analyser, meterData };
+      }
+
+      function getVoiceProfiles() {
+        return {
+          voiceA: {
+            baseMidi: 45, //A1
+            gapScale: 1,
+            ampScale: 1,
+            minDur: 5,
+            maxDur: 18,
+            delayTime: 0.42,
+            delayFeedback: 0.22,
+            reverbMix: 0.26,
+            filterQ: 0.35,
+            detuneCents: 4,
+            shimmerScale: 1,
+          },
+          voiceB: {
+            baseMidi: 52, // E1
+            gapScale: 0.95,
+            ampScale: 0.82,
+            minDur: 8,
+            maxDur: 22,
+            delayTime: 0.66,
+            delayFeedback: 0.27,
+            reverbMix: 0.34,
+            filterQ: 0.28,
+            detuneCents: 7,
+            shimmerScale: 1.2,
+            waveform: "sine",
+            modMinHz: 0.15,
+            modSpanHz: 0.45,
+          },
+        };
+      }
+
+      async function buildGraph(audioCtx, config) {
+        const graphMasterGain = audioCtx.createGain();
+        graphMasterGain.gain.value = 0;
+        graphMasterGain.connect(audioCtx.destination);
+
+        const graphNoiseGain = audioCtx.createGain();
+        graphNoiseGain.gain.value = config.noise.volume;
+
+        const t0 = audioCtx.currentTime;
+        const noiseMod = audioCtx.createOscillator();
+        noiseMod.type = "sine";
+        noiseMod.frequency.setValueAtTime(0.05, t0);
+
+        const noiseModDepth = audioCtx.createGain();
+        noiseModDepth.gain.setValueAtTime(0.002, t0);
+
+        noiseMod.connect(noiseModDepth);
+        noiseModDepth.connect(graphNoiseGain.gain);
+        noiseMod.start(t0);
+
+        const graphNoisePan = audioCtx.createStereoPanner();
+        graphNoisePan.pan.value = config.noise.pan;
+
+        const graphNoiseTilt = audioCtx.createBiquadFilter();
+        graphNoiseTilt.type = "highshelf";
+        graphNoiseTilt.frequency.value = 2200;
+
+        const graphNoiseLP = audioCtx.createBiquadFilter();
+        graphNoiseLP.type = "lowpass";
+        graphNoiseLP.Q.value = 0.2;
+
+        const graphNoiseWorklet = await buildNoiseWorklet(audioCtx);
+
+        graphNoiseWorklet.connect(graphNoiseTilt);
+        graphNoiseTilt.connect(graphNoiseLP);
+        graphNoiseLP.connect(graphNoisePan);
+        graphNoisePan.connect(graphNoiseGain);
+        graphNoiseGain.connect(graphMasterGain);
+
+        const { voiceA, voiceB } = getVoiceProfiles();
+        const graphMusicA = buildMusicChain(audioCtx, graphMasterGain, config.voices.a.musicVol, voiceA);
+        const graphMusicB = buildMusicChain(audioCtx, graphMasterGain, config.voices.b.musicVol, voiceB);
+
+        return {
+          masterGain: graphMasterGain,
+          noiseGain: graphNoiseGain,
+          noisePan: graphNoisePan,
+          noiseTilt: graphNoiseTilt,
+          noiseLP: graphNoiseLP,
+          noiseWorklet: graphNoiseWorklet,
+          musicA: graphMusicA,
+          musicB: graphMusicB,
+          voiceA,
+          voiceB,
+        };
       }
 
       function createVoiceComposer(profile = {}) {
@@ -790,91 +881,27 @@
         // If auto-starting from elsewhere, call ctx.resume() after user interaction.
         ctx = new (window.AudioContext || window.webkitAudioContext)();
 
+        const graph = await buildGraph(ctx, liveConfig);
+        masterGain = graph.masterGain;
+        noiseGain = graph.noiseGain;
+        noisePan = graph.noisePan;
+        noiseTilt = graph.noiseTilt;
+        noiseLP = graph.noiseLP;
+        noiseWorklet = graph.noiseWorklet;
+        musicA = graph.musicA;
+        musicB = graph.musicB;
+        const voiceA = graph.voiceA;
+        const voiceB = graph.voiceB;
+
         // Master
-        masterGain = ctx.createGain();
         const startTime = ctx.currentTime;
         masterGain.gain.setValueAtTime(0, startTime);
-        masterGain.connect(ctx.destination);
         masterFade = {
           from: 0,
           to: liveConfig.master,
           startedAt: performance.now(),
           durationMs: FADE_IN_SEC * 1000,
         };
-
-        // Noise chain
-        noiseGain = ctx.createGain();
-        noiseGain.gain.value = liveConfig.noise.volume;
-
-        const t0 = ctx.currentTime;
-
-        const mod = ctx.createOscillator();
-        mod.type = "sine";
-        mod.frequency.setValueAtTime(0.05, t0);
-
-        const modDepth = ctx.createGain();
-        modDepth.gain.setValueAtTime(0.002, t0);
-
-        mod.connect(modDepth);
-        modDepth.connect(noiseGain.gain);
-        mod.start(t0);
-
-        noisePan = ctx.createStereoPanner();
-        noisePan.pan.value = liveConfig.noise.pan;
-
-        noiseTilt = ctx.createBiquadFilter();
-        noiseTilt.type = "highshelf";
-        noiseTilt.frequency.value = 2200; // tilt point
-
-        noiseLP = ctx.createBiquadFilter();
-        noiseLP.type = "lowpass";
-        noiseLP.Q.value = 0.2;
-
-        noiseWorklet = await buildNoiseWorklet(ctx);
-
-        // connect noise chain
-        noiseWorklet.connect(noiseTilt);
-        noiseTilt.connect(noiseLP);
-        noiseLP.connect(noisePan);
-        noisePan.connect(noiseGain);
-        noiseGain.connect(masterGain);
-
-        // MIDI notes lookup: https://studiocode.dev/resources/midi-middle-c/
-        // Middle C is 60 and it's semi tones from there. 
-        const voiceA = {
-          baseMidi: 45, //A1
-          gapScale: 1,
-          ampScale: 1,
-          minDur: 5,
-          maxDur: 18,
-          delayTime: 0.42,
-          delayFeedback: 0.22,
-          reverbMix: 0.26,
-          filterQ: 0.35,
-          detuneCents: 4,
-          shimmerScale: 1,
-        };
-
-        const voiceB = {
-          baseMidi: 52, // E1
-          gapScale: 0.95,
-          ampScale: 0.82,
-          minDur: 8,
-          maxDur: 22,
-          delayTime: 0.66,
-          delayFeedback: 0.27,
-          reverbMix: 0.34,
-          filterQ: 0.28,
-          detuneCents: 7,
-          shimmerScale: 1.2,
-          waveform: "sine",
-          modMinHz: 0.15,
-          modSpanHz: 0.45,
-        };
-
-        // Music chains
-        musicA = buildMusicChain(liveConfig.voices.a.musicVol, voiceA);
-        musicB = buildMusicChain(liveConfig.voices.b.musicVol, voiceB);
 
         // apply initial params
         applyNoiseColor(liveConfig.noise.color);
