@@ -111,6 +111,11 @@
       background: #1a1a1f;
     }
 
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
     .status {
       color: #a8a8ad;
       font-size: 12px;
@@ -135,8 +140,11 @@
 
   <div class="bar">
     <button id="toggle">Start</button>
+    <button id="exportTrack">Export 864s MP3</button>
     <div class="status" id="status">Stopped</div>
   </div>
+
+  <div class="tiny">Export renders an 864 second MP3 snapshot with tags and artwork. This can take a minute.</div>
 
   <div class="row">
     <div class="card">
@@ -241,6 +249,7 @@
 
       const ui = {
         toggle: $("toggle"),
+        exportTrack: $("exportTrack"),
         status: $("status"),
         master: $("master"),
         noiseVol: $("noiseVol"),
@@ -297,6 +306,33 @@
       const DEBUG_RUNTIME = new URLSearchParams(window.location.search).has("debug");
       const SCHEDULER_LATE_WARN_MS = 180;
       const SCHEDULER_REPORT_EVERY_MS = 60000;
+      const EXPORT_DURATION_SEC = 864;
+      const EXPORT_SAMPLE_RATE = 32000;
+      const EXPORT_MP3_BITRATE_KBPS = 128;
+      const EXPORT_FADE_IN_SEC = 2.0;
+      const EXPORT_FADE_OUT_SEC = 3.0;
+      const EXPORT_NOTE_END_GUARD_SEC = 12;
+      const EXPORT_NOTE_TAIL_GUARD_SEC = 2;
+      const EXPORT_DENSITY_TAPER_WINDOW_SEC = 150;
+      const EXPORT_DENSITY_TAPER_FLOOR = 0.22;
+      const EXPORT_LIB_LAME_URL = "https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js";
+      const EXPORT_LIB_ID3_URL = "https://cdn.jsdelivr.net/npm/browser-id3-writer@6.3.1/dist/browser-id3-writer.mjs";
+      const MUSIC_NUDGE_STEP = 0.03;
+      const MUSIC_NUDGE_MAX = 0.12;
+      const MUSIC_NUDGE_TIMING = {
+        a: {
+          initialMinSec: 8,
+          initialMaxSec: 16,
+          nextMinSec: 12,
+          nextMaxSec: 38,
+        },
+        b: {
+          initialMinSec: 10,
+          initialMaxSec: 20,
+          nextMinSec: 15,
+          nextMaxSec: 45,
+        },
+      };
 
       function finiteOr(value, fallback) {
         return Number.isFinite(value) ? value : fallback;
@@ -390,7 +426,8 @@
       let musicBrightOffsetA = 0;
       let musicBrightOffsetB = 0;
 
-      function randBetween(min, max) { return min + random01() * (max - min); }
+      function randBetweenWith(rand, min, max) { return min + rand() * (max - min); }
+      function randBetween(min, max) { return randBetweenWith(random01, min, max); }
 
       function stopAllMusicNudges() {
         for (const t of modTimers) clearTimeout(t);
@@ -401,21 +438,17 @@
         // Safety: if called twice, clear prior timers.
         stopAllMusicNudges();
 
-        // Bounds chosen to be felt, not heard.
-        const OFFSET_STEP = 0.03;   // nudge size (in 0..1 brightness units)
-        const OFFSET_MAX = 0.12;    // max drift away from UI position
-
         const nudgeA = () => {
           if (!ctx || !running || !musicA) return;
           if (isPaused || isPausing) {
             modTimers.push(setTimeout(nudgeA, 2000));
             return;
           }
-          const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
-          musicBrightOffsetA = clamp(musicBrightOffsetA + delta, -OFFSET_MAX, OFFSET_MAX);
+          const delta = randBetween(-MUSIC_NUDGE_STEP, MUSIC_NUDGE_STEP);
+          musicBrightOffsetA = clamp(musicBrightOffsetA + delta, -MUSIC_NUDGE_MAX, MUSIC_NUDGE_MAX);
           const base = liveConfig.voices.a.brightness;
           applyMusicBrightness(clamp(base + musicBrightOffsetA, 0, 1), musicA.musicLP);
-          const nextMs = Math.floor(randBetween(12000, 38000));
+          const nextMs = Math.floor(randBetween(MUSIC_NUDGE_TIMING.a.nextMinSec * 1000, MUSIC_NUDGE_TIMING.a.nextMaxSec * 1000));
           modTimers.push(setTimeout(nudgeA, nextMs));
         };
 
@@ -425,17 +458,17 @@
             modTimers.push(setTimeout(nudgeB, 2000));
             return;
           }
-          const delta = randBetween(-OFFSET_STEP, OFFSET_STEP);
-          musicBrightOffsetB = clamp(musicBrightOffsetB + delta, -OFFSET_MAX, OFFSET_MAX);
+          const delta = randBetween(-MUSIC_NUDGE_STEP, MUSIC_NUDGE_STEP);
+          musicBrightOffsetB = clamp(musicBrightOffsetB + delta, -MUSIC_NUDGE_MAX, MUSIC_NUDGE_MAX);
           const base = liveConfig.voices.b.brightness;
           applyMusicBrightness(clamp(base + musicBrightOffsetB, 0, 1), musicB.musicLP);
-          const nextMs = Math.floor(randBetween(15000, 45000));
+          const nextMs = Math.floor(randBetween(MUSIC_NUDGE_TIMING.b.nextMinSec * 1000, MUSIC_NUDGE_TIMING.b.nextMaxSec * 1000));
           modTimers.push(setTimeout(nudgeB, nextMs));
         };
 
         // Start with a gentle delay so it doesn't feel like immediate automation.
-        modTimers.push(setTimeout(nudgeA, Math.floor(randBetween(8000, 16000))));
-        modTimers.push(setTimeout(nudgeB, Math.floor(randBetween(10000, 20000))));
+        modTimers.push(setTimeout(nudgeA, Math.floor(randBetween(MUSIC_NUDGE_TIMING.a.initialMinSec * 1000, MUSIC_NUDGE_TIMING.a.initialMaxSec * 1000))));
+        modTimers.push(setTimeout(nudgeB, Math.floor(randBetween(MUSIC_NUDGE_TIMING.b.initialMinSec * 1000, MUSIC_NUDGE_TIMING.b.initialMaxSec * 1000))));
       }
 
       // ---------- Audio graph state ----------
@@ -460,23 +493,27 @@
       let schedulerAbortA = { aborted: false };
       let schedulerAbortB = { aborted: false };
       let runtimeDiagnostics = null;
+      let isExportingTrack = false;
+      let exportCodecModulesPromise = null;
+      let exportArtworkBytesPromise = null;
+      const externalScriptPromises = new Map();
 
       // ---------- Generative logic ----------
-      function expRand(meanSeconds) {
+      function expRand(meanSeconds, rand = random01) {
         // Exponential distribution for Poisson process timing.
-        return -Math.log(1 - random01()) * meanSeconds;
+        return -Math.log(1 - rand()) * meanSeconds;
       }
 
-      function chooseWeighted(items) {
+      function chooseWeighted(items, rand = random01) {
         const sum = items.reduce((a, x) => a + x.w, 0);
-        let r = random01() * sum;
+        let r = rand() * sum;
         for (const x of items) { r -= x.w; if (r <= 0) return x.v; }
         return items[items.length - 1].v;
       }
 
       function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
-      function makeNotePicker(baseMidi = 48) {
+      function makeNotePicker(baseMidi = 48, rand = random01) {
         // Minor pentatonic: forgiving + “never too melodic”.
         // A Minor Pentatonic: A (0), C(3), D(5), E(7), and G(10)
         const scale = [0, 3, 5, 7, 10];
@@ -492,11 +529,11 @@
             { v: 0, w: 0.16 },
             { v: 1, w: 0.34 },
             { v: 2, w: 0.08 },
-          ]);
+          ], rand);
           degree = clamp(degree + step, 0, scale.length - 1);
 
           // Rare octave drift (minutes-scale).
-          if (random01() < 0.03) octave = clamp(octave + (random01() < 0.5 ? -1 : 1), -1, 1);
+          if (rand() < 0.03) octave = clamp(octave + (rand() < 0.5 ? -1 : 1), -1, 1);
 
           const midi = baseMidi + octave * 12 + scale[degree];
           return midiToFreq(midi);
@@ -543,26 +580,39 @@
         return new AudioWorkletNode(ctx, "noise-node", { numberOfOutputs: 1, outputChannelCount: [2] });
       }
 
-      function applyNoiseColor(amount01) {
+      function applyNoiseColorToNodes(audioCtx, lpNode, tiltNode, amount01) {
         // amount01: 0 (white) -> 1 (brown-ish)
         // We do a gentle lowpass + tilt using shelving filters.
         // Map to meaningful ranges.
         const lpHz = 18000 - amount01 * 15500; // 18k -> 2.5k
         const tiltDb = -amount01 * 10;         // 0 -> -10 dB highs (darker)
         // setTargetAtTime avoids zipper noise from slider moves on filter params.
-        noiseLP.frequency.setTargetAtTime(lpHz, ctx.currentTime, 0.04);
-        noiseTilt.gain.setTargetAtTime(tiltDb, ctx.currentTime, 0.04);
+        lpNode.frequency.setTargetAtTime(lpHz, audioCtx.currentTime, 0.04);
+        tiltNode.gain.setTargetAtTime(tiltDb, audioCtx.currentTime, 0.04);
+      }
+
+      function applyNoiseColor(amount01) {
+        if (!ctx || !noiseLP || !noiseTilt) return;
+        applyNoiseColorToNodes(ctx, noiseLP, noiseTilt, amount01);
+      }
+
+      function setMusicBrightnessAtTime(lpNode, amount01, timeSec, timeConstantSec = 0.05) {
+        if (!lpNode) return;
+        const hz = 1200 + clamp(amount01, 0, 1) * 7800;
+        lpNode.frequency.setTargetAtTime(hz, Math.max(0, timeSec), Math.max(0.0001, timeConstantSec));
+      }
+
+      function applyMusicBrightnessToNode(audioCtx, amount01, lpNode) {
+        if (!lpNode) return;
+        setMusicBrightnessAtTime(lpNode, amount01, audioCtx.currentTime, 0.05);
       }
 
       function applyMusicBrightness(amount01, lpNode) {
-        if (!lpNode) return;
-        // Dark -> bright: lowpass 1.2k -> 9k
-        const hz = 1200 + amount01 * 7800;
-        // Small time constant = smooth but responsive control updates.
-        lpNode.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
+        if (!ctx) return;
+        applyMusicBrightnessToNode(ctx, amount01, lpNode);
       }
 
-      function playNoteAtTime(audioCtx, targetBus, startTime, freq, amp, durSeconds, bright01, profile = {}) {
+      function playNoteAtTime(audioCtx, targetBus, startTime, freq, amp, durSeconds, bright01, profile = {}, rand = random01) {
         // A gentle tonal voice: triangle + very light FM shimmer.
         const t0 = startTime;
         const t1 = t0 + durSeconds;
@@ -575,12 +625,12 @@
         mod.type = "sine";
         const modMinHz = profile.modMinHz ?? 0.12;
         const modSpanHz = profile.modSpanHz ?? 0.35;
-        mod.frequency.setValueAtTime(modMinHz + random01() * modSpanHz, t0); // ultra-slow
+        mod.frequency.setValueAtTime(modMinHz + rand() * modSpanHz, t0); // ultra-slow
 
         const modGain = audioCtx.createGain();
         // tiny FM index, scaled a bit by brightness
         const shimmerScale = profile.shimmerScale ?? 1;
-        modGain.gain.setValueAtTime(((0.4 + bright01 * 1.2) * (random01() < 0.5 ? 1 : 0.7)) * shimmerScale, t0);
+        modGain.gain.setValueAtTime(((0.4 + bright01 * 1.2) * (rand() < 0.5 ? 1 : 0.7)) * shimmerScale, t0);
 
         // FM: mod -> carrier.frequency
         mod.connect(modGain);
@@ -590,8 +640,8 @@
         vca.gain.setValueAtTime(0, t0);
 
         // Long, soft envelope
-        const a = 0.12 + random01() * 0.22; // attack
-        const r = 1.6 + random01() * 3.2;   // release tail
+        const a = 0.12 + rand() * 0.22; // attack
+        const r = 1.6 + rand() * 3.2;   // release tail
         const sustainTime = Math.max(0.2, durSeconds - a - r);
 
         vca.gain.linearRampToValueAtTime(amp, t0 + a);
@@ -601,7 +651,7 @@
 
         // Gentle random detune drift
         const detuneCents = profile.detuneCents ?? 4;
-        carrier.detune.setValueAtTime((random01() * 2 - 1) * detuneCents, t0);
+        carrier.detune.setValueAtTime((rand() * 2 - 1) * detuneCents, t0);
 
         carrier.connect(vca);
         vca.connect(targetBus);
@@ -695,7 +745,10 @@
         };
       }
 
-      async function buildGraph(audioCtx, config) {
+      async function buildGraph(audioCtx, config, options = {}) {
+        const offlineRenderDurationSec = Math.max(0, finiteOr(options.offlineRenderDurationSec, 0));
+        const noiseRandom = typeof options.noiseRandom === "function" ? options.noiseRandom : random01;
+
         const graphMasterGain = audioCtx.createGain();
         graphMasterGain.gain.value = 0;
         graphMasterGain.connect(audioCtx.destination);
@@ -726,9 +779,26 @@
         graphNoiseLP.type = "lowpass";
         graphNoiseLP.Q.value = 0.2;
 
-        const graphNoiseWorklet = await buildNoiseWorklet(audioCtx);
+        let graphNoiseWorklet = null;
 
-        graphNoiseWorklet.connect(graphNoiseTilt);
+        if (offlineRenderDurationSec > 0) {
+          const frameCount = Math.max(1, Math.ceil(offlineRenderDurationSec * audioCtx.sampleRate));
+          const noiseBuffer = audioCtx.createBuffer(2, frameCount, audioCtx.sampleRate);
+          for (let c = 0; c < 2; c++) {
+            const data = noiseBuffer.getChannelData(c);
+            for (let i = 0; i < data.length; i++) data[i] = (noiseRandom() * 2 - 1);
+          }
+          const noiseSource = audioCtx.createBufferSource();
+          noiseSource.buffer = noiseBuffer;
+          noiseSource.connect(graphNoiseTilt);
+          noiseSource.start(t0);
+          noiseSource.stop(t0 + offlineRenderDurationSec);
+          graphNoiseWorklet = noiseSource;
+        } else {
+          graphNoiseWorklet = await buildNoiseWorklet(audioCtx);
+          graphNoiseWorklet.connect(graphNoiseTilt);
+        }
+
         graphNoiseTilt.connect(graphNoiseLP);
         graphNoiseLP.connect(graphNoisePan);
         graphNoisePan.connect(graphNoiseGain);
@@ -752,8 +822,8 @@
         };
       }
 
-      function createVoiceComposer(profile = {}) {
-        const pick = makeNotePicker(profile.baseMidi ?? 48);
+      function createVoiceComposer(profile = {}, rand = random01) {
+        const pick = makeNotePicker(profile.baseMidi ?? 48, rand);
         const fallbackFreq = midiToFreq(profile.baseMidi ?? 48);
 
         return function composeNextEvent(voiceState) {
@@ -763,19 +833,19 @@
           // 0 => ~30s gap, 1 => ~7s gap.
           const d = state.density;
           const meanGap = (30 - d * 23) * (profile.gapScale ?? 1);
-          const gapSeconds = Math.max(0, finiteOr(expRand(meanGap), meanGap));
+          const gapSeconds = Math.max(0, finiteOr(expRand(meanGap, rand), meanGap));
 
           const bright = state.brightness;
           const freq = Math.max(20, finiteOr(pick(), fallbackFreq));
 
           // Quiet amplitude by design; scaled by Music volume.
           const musicVol = state.musicVol;
-          const amp = Math.max(0.0001, finiteOr(((0.012 + random01() * 0.02) * (0.25 + musicVol * 0.95)) * (profile.ampScale ?? 1), 0.01));
+          const amp = Math.max(0.0001, finiteOr(((0.012 + rand() * 0.02) * (0.25 + musicVol * 0.95)) * (profile.ampScale ?? 1), 0.01));
 
           // Long durations: 5–18 sec
           const minDur = profile.minDur ?? 5;
           const maxDur = profile.maxDur ?? 18;
-          const dur = clamp(minDur + random01() * Math.max(0.1, (maxDur - minDur)), minDur, maxDur);
+          const dur = clamp(minDur + rand() * Math.max(0.1, (maxDur - minDur)), minDur, maxDur);
 
           return {
             waitSeconds: gapSeconds,
@@ -784,14 +854,14 @@
         };
       }
 
-      function createTimedNoteRenderer(audioCtx, targetBus, profile = {}) {
+      function createTimedNoteRenderer(audioCtx, targetBus, profile = {}, rand = random01) {
         return function renderNoteAtTime(noteStartTime, note) {
-          playNoteAtTime(audioCtx, targetBus, noteStartTime, note.freq, note.amp, note.dur, note.bright, profile);
+          playNoteAtTime(audioCtx, targetBus, noteStartTime, note.freq, note.amp, note.dur, note.bright, profile, rand);
         };
       }
 
       async function schedulerLoop(abortToken, audioCtx, getVoiceState, renderNoteAtTime, profile = {}, metrics = null) {
-        const composeNextEvent = createVoiceComposer(profile);
+        const composeNextEvent = createVoiceComposer(profile, random01);
         let nextNoteAt = null;
 
         while (!abortToken.aborted) {
@@ -829,6 +899,382 @@
           const noteStartTime = Math.max(nextNoteAt, audioCtx.currentTime);
           renderNoteAtTime(noteStartTime, event.note);
           maybeReportSchedulerMetrics(metrics);
+        }
+      }
+
+      function createDensityTaperAtTime(baseDensity, durationSec, taperWindowSec, taperFloor) {
+        const safeBaseDensity = clamp(finiteOr(baseDensity, 0.5), 0, 1);
+        const safeDurationSec = Math.max(1, finiteOr(durationSec, EXPORT_DURATION_SEC));
+        const safeWindowSec = clamp(finiteOr(taperWindowSec, EXPORT_DENSITY_TAPER_WINDOW_SEC), 1, safeDurationSec);
+        const floor = clamp(finiteOr(taperFloor, EXPORT_DENSITY_TAPER_FLOOR), 0.02, 1);
+        const taperStartSec = Math.max(0, safeDurationSec - safeWindowSec);
+
+        return function densityAtTime(timeSec) {
+          const t = clamp(finiteOr(timeSec, 0), 0, safeDurationSec);
+          if (t <= taperStartSec) return safeBaseDensity;
+          const progress = (t - taperStartSec) / safeWindowSec;
+          const scale = 1 - (1 - floor) * clamp(progress, 0, 1);
+          return clamp(safeBaseDensity * scale, 0, 1);
+        };
+      }
+
+      function createBrightnessNudgeTimeline(baseBrightness, durationSec, timingProfile, rand = random01) {
+        const timeline = [{ timeSec: 0, value: clamp(baseBrightness, 0, 1) }];
+        const safeDurationSec = Math.max(1, finiteOr(durationSec, EXPORT_DURATION_SEC));
+        let offset = 0;
+        let nowSec = randBetweenWith(rand, timingProfile.initialMinSec, timingProfile.initialMaxSec);
+
+        while (nowSec < safeDurationSec) {
+          offset = clamp(offset + randBetweenWith(rand, -MUSIC_NUDGE_STEP, MUSIC_NUDGE_STEP), -MUSIC_NUDGE_MAX, MUSIC_NUDGE_MAX);
+          timeline.push({
+            timeSec: nowSec,
+            value: clamp(baseBrightness + offset, 0, 1),
+          });
+          nowSec += randBetweenWith(rand, timingProfile.nextMinSec, timingProfile.nextMaxSec);
+        }
+
+        return timeline;
+      }
+
+      function sampleTimelineAtTime(timeline, timeSec) {
+        let value = timeline[0] ? timeline[0].value : 0.5;
+        for (let i = 0; i < timeline.length; i++) {
+          if (timeline[i].timeSec > timeSec) break;
+          value = timeline[i].value;
+        }
+        return value;
+      }
+
+      function scheduleBrightnessTimeline(lpNode, timeline) {
+        if (!lpNode || !timeline || timeline.length === 0) return;
+        const initialHz = 1200 + clamp(timeline[0].value, 0, 1) * 7800;
+        lpNode.frequency.cancelScheduledValues(0);
+        lpNode.frequency.setValueAtTime(initialHz, 0);
+        for (let i = 1; i < timeline.length; i++) {
+          setMusicBrightnessAtTime(lpNode, timeline[i].value, timeline[i].timeSec, 0.05);
+        }
+      }
+
+      function scheduleExportMasterFade(audioCtx, masterNode, targetGain, durationSec) {
+        if (!audioCtx || !masterNode) return;
+        const safeDurationSec = Math.max(1, finiteOr(durationSec, EXPORT_DURATION_SEC));
+        const fadeInSec = clamp(finiteOr(EXPORT_FADE_IN_SEC, 0), 0, safeDurationSec * 0.5);
+        const fadeOutSec = clamp(finiteOr(EXPORT_FADE_OUT_SEC, 0), 0, safeDurationSec * 0.5);
+        const fadeOutStartSec = Math.max(fadeInSec, safeDurationSec - fadeOutSec);
+
+        masterNode.gain.cancelScheduledValues(0);
+        masterNode.gain.setValueAtTime(0, 0);
+        if (fadeInSec > 0) {
+          masterNode.gain.linearRampToValueAtTime(targetGain, fadeInSec);
+        } else {
+          masterNode.gain.setValueAtTime(targetGain, 0);
+        }
+
+        masterNode.gain.setValueAtTime(targetGain, fadeOutStartSec);
+        if (fadeOutSec > 0) {
+          masterNode.gain.linearRampToValueAtTime(0.0001, safeDurationSec);
+        }
+      }
+
+      function buildExportVoiceStateReader(baseVoiceState, durationSec, brightnessTimeline) {
+        const base = sanitizeVoiceState(baseVoiceState);
+        const densityAtTime = createDensityTaperAtTime(base.density, durationSec, EXPORT_DENSITY_TAPER_WINDOW_SEC, EXPORT_DENSITY_TAPER_FLOOR);
+
+        return function getVoiceStateAtTime(timeSec) {
+          return {
+            musicVol: base.musicVol,
+            density: densityAtTime(timeSec),
+            brightness: sampleTimelineAtTime(brightnessTimeline, timeSec),
+          };
+        };
+      }
+
+      function renderOfflineVoiceTimeline(audioCtx, durationSec, getVoiceStateAtTime, targetBus, profile = {}, rand = random01, options = {}) {
+        const composeNextEvent = createVoiceComposer(profile, rand);
+        const renderNoteAtTime = createTimedNoteRenderer(audioCtx, targetBus, profile, rand);
+        const safeDurationSec = Math.max(1, finiteOr(durationSec, EXPORT_DURATION_SEC));
+        const scheduleCutoffSec = clamp(finiteOr(options.scheduleCutoffSec, safeDurationSec), 0, safeDurationSec);
+        const noteTailCutoffSec = clamp(finiteOr(options.noteTailCutoffSec, safeDurationSec), 0, safeDurationSec);
+        const maxEvents = 24000;
+        let nextNoteAt = 0;
+        let noteCount = 0;
+
+        for (let i = 0; i < maxEvents; i++) {
+          const stateNow = sanitizeVoiceState(getVoiceStateAtTime(nextNoteAt));
+          const event = composeNextEvent(stateNow);
+          nextNoteAt += event.waitSeconds;
+          if (nextNoteAt >= scheduleCutoffSec) break;
+
+          const stateAtNote = sanitizeVoiceState(getVoiceStateAtTime(nextNoteAt));
+          event.note.bright = stateAtNote.brightness;
+          if ((nextNoteAt + event.note.dur) > noteTailCutoffSec) break;
+
+          renderNoteAtTime(nextNoteAt, event.note);
+          noteCount += 1;
+        }
+
+        return noteCount;
+      }
+
+      function concatUint8Arrays(chunks) {
+        let total = 0;
+        for (const chunk of chunks) total += chunk.length;
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          out.set(chunk, offset);
+          offset += chunk.length;
+        }
+        return out;
+      }
+
+      function floatSampleToInt16(sample) {
+        const s = clamp(sample, -1, 1);
+        return s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7fff);
+      }
+
+      function loadExternalScript(url) {
+        if (externalScriptPromises.has(url)) return externalScriptPromises.get(url);
+
+        const promise = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = url;
+          script.async = true;
+          script.crossOrigin = "anonymous";
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error(`Script load failed: ${url}`));
+          document.head.appendChild(script);
+        });
+
+        externalScriptPromises.set(url, promise);
+        return promise;
+      }
+
+      async function loadExportCodecModules() {
+        if (!exportCodecModulesPromise) {
+          exportCodecModulesPromise = (async () => {
+            const [, id3Module] = await Promise.all([
+              loadExternalScript(EXPORT_LIB_LAME_URL),
+              import(EXPORT_LIB_ID3_URL),
+            ]);
+
+            const lameGlobal = window.lamejs;
+
+            if (!lameGlobal || typeof lameGlobal.Mp3Encoder !== "function") {
+              throw new Error("MP3 encoder module did not load");
+            }
+            if (!id3Module || typeof id3Module.ID3Writer !== "function") {
+              throw new Error("ID3 writer module did not load");
+            }
+
+            return {
+              Mp3Encoder: lameGlobal.Mp3Encoder,
+              ID3Writer: id3Module.ID3Writer,
+            };
+          })();
+        }
+
+        return exportCodecModulesPromise;
+      }
+
+      async function getExportArtworkBytes() {
+        if (!exportArtworkBytesPromise) {
+          exportArtworkBytesPromise = (async () => {
+            const res = await fetch("./apple-touch-icon.png");
+            if (!res.ok) throw new Error("Artwork fetch failed");
+            const ab = await res.arrayBuffer();
+            return new Uint8Array(ab);
+          })();
+        }
+
+        return exportArtworkBytesPromise;
+      }
+
+      async function encodeAudioBufferToMp3(audioBuffer, bitRateKbps, Mp3Encoder, progressCallback = null) {
+        const channelCount = Math.min(2, audioBuffer.numberOfChannels);
+        const sampleRate = audioBuffer.sampleRate;
+        const frameCount = audioBuffer.length;
+        const chunkSize = 1152;
+        const left = audioBuffer.getChannelData(0);
+        const right = channelCount > 1 ? audioBuffer.getChannelData(1) : null;
+        const encoder = new Mp3Encoder(channelCount, sampleRate, bitRateKbps);
+        const out = [];
+
+        for (let i = 0; i < frameCount; i += chunkSize) {
+          const n = Math.min(chunkSize, frameCount - i);
+          const leftChunk = new Int16Array(n);
+          for (let j = 0; j < n; j++) leftChunk[j] = floatSampleToInt16(left[i + j]);
+
+          let mp3buf;
+          if (channelCount > 1 && right) {
+            const rightChunk = new Int16Array(n);
+            for (let j = 0; j < n; j++) rightChunk[j] = floatSampleToInt16(right[i + j]);
+            mp3buf = encoder.encodeBuffer(leftChunk, rightChunk);
+          } else {
+            mp3buf = encoder.encodeBuffer(leftChunk);
+          }
+
+          if (mp3buf.length > 0) out.push(new Uint8Array(mp3buf));
+
+          if ((i / chunkSize) % 240 === 0) {
+            if (progressCallback) progressCallback(i / frameCount);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+        }
+
+        const flush = encoder.flush();
+        if (flush.length > 0) out.push(new Uint8Array(flush));
+        if (progressCallback) progressCallback(1);
+        return concatUint8Arrays(out);
+      }
+
+      function addId3Tags(mp3Bytes, ID3Writer, metadata) {
+        const source = mp3Bytes.buffer.slice(mp3Bytes.byteOffset, mp3Bytes.byteOffset + mp3Bytes.byteLength);
+        const writer = new ID3Writer(source);
+        writer.setFrame("TIT2", metadata.title);
+        writer.setFrame("TPE1", [metadata.artist]);
+        writer.setFrame("TALB", metadata.album);
+        writer.setFrame("COMM", {
+          description: "aftertone",
+          text: metadata.comment,
+          language: "eng",
+        });
+
+        if (metadata.artworkBytes) {
+          writer.setFrame("APIC", {
+            type: 3,
+            data: metadata.artworkBytes,
+            description: "Cover",
+            useUnicodeEncoding: false,
+          });
+        }
+
+        writer.addTag();
+        return new Uint8Array(writer.arrayBuffer);
+      }
+
+      function downloadBlob(blob, fileName) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+
+      function getExportTrackLabel() {
+        return `Export ${EXPORT_DURATION_SEC}s MP3`;
+      }
+
+      async function exportTrackMp3() {
+        if (isExportingTrack) return;
+
+        const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        if (!OfflineCtx) {
+          ui.exportTrack.textContent = "Offline N/A";
+          setTimeout(() => { ui.exportTrack.textContent = getExportTrackLabel(); }, 1400);
+          return;
+        }
+
+        refreshUI();
+        const config = {
+          master: liveConfig.master,
+          noise: {
+            volume: liveConfig.noise.volume,
+            color: liveConfig.noise.color,
+            pan: liveConfig.noise.pan,
+          },
+          voices: {
+            a: { ...liveConfig.voices.a },
+            b: { ...liveConfig.voices.b },
+          },
+        };
+
+        isExportingTrack = true;
+        ui.exportTrack.disabled = true;
+        ui.exportTrack.textContent = "Loading codecs...";
+
+        try {
+          const { Mp3Encoder, ID3Writer } = await loadExportCodecModules();
+          const artworkBytes = await getExportArtworkBytes().catch(() => null);
+
+          ui.exportTrack.textContent = "Rendering...";
+
+          const frameCount = Math.ceil(EXPORT_DURATION_SEC * EXPORT_SAMPLE_RATE);
+          const offlineCtx = new OfflineCtx(2, frameCount, EXPORT_SAMPLE_RATE);
+          const exportSeed = getDefaultSeed();
+          const rngNoise = createSeededRng(exportSeed ^ 0x1f123bb5);
+          const rngA = createSeededRng(exportSeed ^ 0xa5a5a5a5);
+          const rngB = createSeededRng(exportSeed ^ 0x5a5a5a5a);
+          const rngNudgeA = createSeededRng(exportSeed ^ 0x11aa66bb);
+          const rngNudgeB = createSeededRng(exportSeed ^ 0xbb66aa11);
+
+          const graph = await buildGraph(offlineCtx, config, {
+            offlineRenderDurationSec: EXPORT_DURATION_SEC,
+            noiseRandom: rngNoise,
+          });
+
+          scheduleExportMasterFade(offlineCtx, graph.masterGain, config.master, EXPORT_DURATION_SEC);
+          applyNoiseColorToNodes(offlineCtx, graph.noiseLP, graph.noiseTilt, config.noise.color);
+
+          const brightnessTimelineA = createBrightnessNudgeTimeline(config.voices.a.brightness, EXPORT_DURATION_SEC, MUSIC_NUDGE_TIMING.a, rngNudgeA);
+          const brightnessTimelineB = createBrightnessNudgeTimeline(config.voices.b.brightness, EXPORT_DURATION_SEC, MUSIC_NUDGE_TIMING.b, rngNudgeB);
+          scheduleBrightnessTimeline(graph.musicA.musicLP, brightnessTimelineA);
+          scheduleBrightnessTimeline(graph.musicB.musicLP, brightnessTimelineB);
+
+          const getVoiceStateA = buildExportVoiceStateReader(config.voices.a, EXPORT_DURATION_SEC, brightnessTimelineA);
+          const getVoiceStateB = buildExportVoiceStateReader(config.voices.b, EXPORT_DURATION_SEC, brightnessTimelineB);
+
+          const scheduleCutoffSec = Math.max(0, EXPORT_DURATION_SEC - Math.max(EXPORT_NOTE_END_GUARD_SEC, EXPORT_FADE_OUT_SEC + 0.5));
+          const noteTailCutoffSec = Math.max(0, EXPORT_DURATION_SEC - EXPORT_NOTE_TAIL_GUARD_SEC);
+
+          const noteCountA = renderOfflineVoiceTimeline(offlineCtx, EXPORT_DURATION_SEC, getVoiceStateA, graph.musicA.musicBus, graph.voiceA, rngA, {
+            scheduleCutoffSec,
+            noteTailCutoffSec,
+          });
+          const noteCountB = renderOfflineVoiceTimeline(offlineCtx, EXPORT_DURATION_SEC, getVoiceStateB, graph.musicB.musicBus, graph.voiceB, rngB, {
+            scheduleCutoffSec,
+            noteTailCutoffSec,
+          });
+
+          const rendered = await offlineCtx.startRendering();
+          ui.exportTrack.textContent = "Encoding MP3...";
+
+          const mp3Bytes = await encodeAudioBufferToMp3(rendered, EXPORT_MP3_BITRATE_KBPS, Mp3Encoder, (progress01) => {
+            if (progress01 >= 0.999) return;
+            const pct = Math.floor(progress01 * 100);
+            ui.exportTrack.textContent = `Encoding ${pct}%...`;
+          });
+
+          ui.exportTrack.textContent = "Tagging...";
+          const taggedMp3 = addId3Tags(mp3Bytes, ID3Writer, {
+            title: "aftertone",
+            artist: "notUnplanned",
+            album: "aftertone exports",
+            comment: `seed=${exportSeed};duration=${EXPORT_DURATION_SEC}s;bitrate=${EXPORT_MP3_BITRATE_KBPS}kbps;sampleRate=${EXPORT_SAMPLE_RATE}`,
+            artworkBytes,
+          });
+
+          const fileName = `aftertone-${EXPORT_DURATION_SEC}s-${exportSeed}.mp3`;
+          downloadBlob(new Blob([taggedMp3], { type: "audio/mpeg" }), fileName);
+
+          ui.exportTrack.textContent = "Exported";
+          if (DEBUG_RUNTIME) {
+            const nudgeA = Math.max(0, brightnessTimelineA.length - 1);
+            const nudgeB = Math.max(0, brightnessTimelineB.length - 1);
+            console.debug(`[aftertone] export seed=${exportSeed} notesA=${noteCountA} notesB=${noteCountB} nudgesA=${nudgeA} nudgesB=${nudgeB} file=${fileName}`);
+          }
+        } catch (err) {
+          ui.exportTrack.textContent = "Export failed";
+          console.error("[aftertone] export failed", err);
+        } finally {
+          isExportingTrack = false;
+          setTimeout(() => {
+            ui.exportTrack.disabled = false;
+            ui.exportTrack.textContent = getExportTrackLabel();
+          }, 1400);
         }
       }
 
@@ -1143,10 +1589,15 @@
         refreshUI();
         meterLoop();
         setupMediaSession();
+        ui.exportTrack.textContent = getExportTrackLabel();
 
         ui.toggle.addEventListener("click", async () => {
           if (!running) await start();
           else await stop();
+        });
+
+        ui.exportTrack.addEventListener("click", async () => {
+          await exportTrackMp3();
         });
 
         ui.master.addEventListener("input", () => {

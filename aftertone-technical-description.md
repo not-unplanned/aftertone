@@ -1,6 +1,6 @@
 # aftertone Technical Description
 
-This document explains the current `index.html` implementation used by aftertone, with a focus on structure, Web Audio graph design, scheduling behavior, and reuse patterns for future work (including offline/export paths).
+This document explains the current `index.html` implementation used by aftertone, with a focus on structure, Web Audio graph design, scheduling behavior, and the built-in offline export path.
 
 ## 1) High-level architecture
 
@@ -20,6 +20,7 @@ The script is wrapped in an IIFE so state remains private and no app globals lea
 
 - UI controls for master, noise, and both tonal voices.
 - Status and transport (`Start`/`Stop`) plus Media Session bindings.
+- Export transport (`Export 864s MP3`) for offline library use.
 - LED meters driven by analyser RMS values.
 - Inline script that owns graph construction, composition, scheduling, modulation, and UI wiring.
 
@@ -193,7 +194,38 @@ Why it matters:
 - OS media keys route through media sessions, not regular keyboard handlers.
 - Suspend/resume keeps graph state alive and avoids abrupt cutoff artifacts.
 
-## 12) Regression tooling
+## 12) Export pipeline (864s MP3)
+
+aftertone now includes an offline export pipeline that reuses the shared composition/render architecture.
+
+High-level flow:
+
+1. Snapshot current normalized UI settings.
+2. Build an `OfflineAudioContext` graph for `864s` (`32kHz`, stereo).
+3. Render both voices via timeline composition (same core composer logic as runtime).
+4. Apply export-specific automation/polish.
+5. Encode rendered PCM to MP3.
+6. Write ID3 tags + APIC artwork, then download.
+
+Key behaviors:
+
+- **Fade in/out**: export master gain uses explicit start/end fades (`scheduleExportMasterFade`).
+- **End guardrails**: notes are not scheduled too close to file end, and note tails are prevented from overrunning the ending.
+- **Nudges included**: brightness nudge timelines are generated and scheduled in offline rendering so exported timbre movement matches runtime character.
+- **Export-only density taper**: density progressively reduces near the end to create a natural settle-out.
+
+Codec/tagging implementation:
+
+- MP3 encoding is done with `lamejs` in chunked blocks.
+- ID3 writing uses `browser-id3-writer`.
+- Artwork is read from `apple-touch-icon.png` and written to APIC.
+
+Loading/perf strategy:
+
+- MP3/ID3 libraries are lazy-loaded when export starts (live playback path stays lightweight).
+- Export status text transitions through loading/rendering/encoding/tagging states.
+
+## 13) Regression tooling
 
 `generation-regression-check.cjs` provides deterministic generation checks:
 
@@ -201,13 +233,18 @@ Why it matters:
 - Verifies different seeds -> different sequence.
 - Validates generated value ranges and approximate density/amplitude envelopes.
 
+Manual checklist also includes export validation:
+
+- `Export 864s MP3` downloads successfully.
+- Resulting file contains embedded artwork.
+
 `testing-checklist.md` includes this command as part of regression pass:
 
 ```bash
 node generation-regression-check.cjs
 ```
 
-## 13) Web Audio API gotchas to remember
+## 14) Web Audio API gotchas to remember
 
 - User gesture is required for context create/resume on most browsers.
 - `setTargetAtTime`/automation smoothing is safer than hard parameter jumps.
@@ -215,7 +252,7 @@ node generation-regression-check.cjs
 - `audioWorklet.addModule()` is async and must complete before node creation.
 - JS timers are coarse vs audio clocks; this architecture intentionally accepts that for ambient timing.
 
-## 14) Reuse guidance
+## 15) Reuse guidance
 
 Good patterns to carry forward:
 
@@ -224,5 +261,6 @@ Good patterns to carry forward:
 - Keep rendering time-explicit (`playNoteAtTime`).
 - Keep runtime config normalized and centralized.
 - Keep diagnostics optional and low overhead.
+- Keep heavyweight codecs and metadata libraries lazy-loaded from the export action path.
 
 For stricter timing or export rendering, this structure can be extended with an offline timeline renderer that consumes the same event composition layer.
