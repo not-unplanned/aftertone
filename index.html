@@ -1132,9 +1132,14 @@
       function addId3Tags(mp3Bytes, ID3Writer, metadata) {
         const source = mp3Bytes.buffer.slice(mp3Bytes.byteOffset, mp3Bytes.byteOffset + mp3Bytes.byteLength);
         const writer = new ID3Writer(source);
+        const normalizedTrack = Number.isInteger(metadata.track)
+          ? ((metadata.track - 1) % 9999 + 9999) % 9999 + 1
+          : null;
         writer.setFrame("TIT2", metadata.title);
         writer.setFrame("TPE1", [metadata.artist]);
         writer.setFrame("TALB", metadata.album);
+        if (normalizedTrack != null) writer.setFrame("TRCK", String(normalizedTrack));
+        if (metadata.year != null) writer.setFrame("TYER", String(metadata.year));
         writer.setFrame("COMM", {
           description: "aftertone",
           text: metadata.comment,
@@ -1252,9 +1257,11 @@
           ui.exportTrack.textContent = "Tagging...";
           const taggedMp3 = addId3Tags(mp3Bytes, ID3Writer, {
             title: "aftertone",
-            artist: "notUnplanned",
+            track: exportSeed,
+            artist: "not-unplanned",
             album: "aftertone exports",
-            comment: `seed=${exportSeed};duration=${EXPORT_DURATION_SEC}s;bitrate=${EXPORT_MP3_BITRATE_KBPS}kbps;sampleRate=${EXPORT_SAMPLE_RATE}`,
+            year: new Date().getFullYear(),
+            comment: `https://not-unplanned.github.io/aftertone/; seed=${exportSeed};`,
             artworkBytes,
           });
 
