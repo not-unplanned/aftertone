@@ -35,5 +35,5 @@ Use this checklist after refactors that touch scheduling, gain staging, or UI wi
 - [ ] Leave running for 5+ minutes: no runaway CPU symptoms, no lockups.
 - [ ] Stop while notes are active: fade-out remains smooth.
 - [ ] Reload page and verify defaults are restored.
-- [ ] Click `Export 864s MP3` and verify an MP3 file downloads with artwork.
+- [ ] Click `Export 864s MP3` and verify an MP3 file downloads with artwork and ID3 genre `Ambient` (ID `26`).
 - [ ] Run `node generation-regression-check.cjs` and confirm it passes.

@@ -358,6 +358,8 @@
       const EXPORT_DENSITY_TAPER_FLOOR = 0.22;
       const EXPORT_LIB_LAME_URL = "https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js";
       const EXPORT_LIB_ID3_URL = "https://cdn.jsdelivr.net/npm/browser-id3-writer@6.3.1/dist/browser-id3-writer.mjs";
+      const EXPORT_ID3_GENRE = "Ambient";
+      const EXPORT_ID3_GENRE_ID = 26;
       const MUSIC_NUDGE_STEP = 0.03;
       const MUSIC_NUDGE_MAX = 0.12;
       const MUSIC_NUDGE_TIMING = {
@@ -1180,6 +1182,12 @@
         writer.setFrame("TALB", metadata.album);
         if (normalizedTrack != null) writer.setFrame("TRCK", String(normalizedTrack));
         if (metadata.year != null) writer.setFrame("TYER", String(metadata.year));
+        const genre = typeof metadata.genre === "string" ? metadata.genre.trim() : "";
+        if (genre) {
+          const genreId = Number.isInteger(metadata.genreId) ? metadata.genreId : null;
+          const genreValue = genreId != null ? `(${genreId})${genre}` : genre;
+          writer.setFrame("TCON", [genreValue]);
+        }
         writer.setFrame("COMM", {
           description: "aftertone",
           text: metadata.comment,
@@ -1303,6 +1311,8 @@
             artist: "not-unplanned",
             album: "aftertone exports",
             year: fullYear,
+            genre: EXPORT_ID3_GENRE,
+            genreId: EXPORT_ID3_GENRE_ID,
             comment: `https://not-unplanned.github.io/aftertone/; (ɔ) ${fullYear} Copyleft – all rights reversed; seed=${exportSeed};`,
             artworkBytes,
           });

@@ -217,7 +217,7 @@ Key behaviors:
 Codec/tagging implementation:
 
 - MP3 encoding is done with `lamejs` in chunked blocks.
-- ID3 writing uses `browser-id3-writer`.
+- ID3 writing uses `browser-id3-writer` (title/artist/album/track/year/comment + genre `TCON` set to `Ambient` / ID `26`).
 - Artwork is read from `apple-touch-icon.png` and written to APIC.
 
 Loading/perf strategy:
@@ -237,6 +237,7 @@ Manual checklist also includes export validation:
 
 - `Export 864s MP3` downloads successfully.
 - Resulting file contains embedded artwork.
+- Resulting file ID3 tags include genre `Ambient` (ID `26`).
 
 `testing-checklist.md` includes this command as part of regression pass:
 
@@ -264,3 +265,8 @@ Good patterns to carry forward:
 - Keep heavyweight codecs and metadata libraries lazy-loaded from the export action path.
 
 For stricter timing or export rendering, this structure can be extended with an offline timeline renderer that consumes the same event composition layer.
+
+## 16) Repo/GitHub Pages packaging note
+
+- `deploy.sh` uses `docs/` as a publish target for GitHub Pages (`github.io`).
+- The script intentionally copies only a limited subset of root assets into `docs/` to constrain what is publicly exposed.
