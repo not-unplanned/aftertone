@@ -186,7 +186,7 @@
 
   <div class="row">
     <div class="card">
-      <h2>Master</h2>
+      <h2><span class="led" id="masterLed" aria-hidden="true"></span>Master</h2>
       <div class="ctrl">
         <label for="master">Master volume</label>
         <input id="master" type="range" min="0" max="100" value="67">
@@ -302,6 +302,7 @@
         musicVol2: $("musicVol2"),
         density2: $("density2"),
         brightness2: $("brightness2"),
+        masterLed: $("masterLed"),
         noiseLed: $("noiseLed"),
         musicLedA: $("musicLedA"),
         musicLedB: $("musicLedB"),
@@ -525,11 +526,13 @@
       const FADE_OUT_SEC = 3.0;
       let masterFade = null;
       let lastMasterVisual = 0;
+      let meterLevelMaster = 0;
       let meterLevelNoise = 0;
       let meterLevelA = 0;
       let meterLevelB = 0;
 
       // nodes
+      let masterMeter = null;
       let masterGain, noiseGain, noisePan, noiseTilt, noiseLP, noiseWorklet;
       let musicA = null;
       let musicB = null;
@@ -794,7 +797,14 @@
 
         const graphMasterGain = audioCtx.createGain();
         graphMasterGain.gain.value = 0;
-        graphMasterGain.connect(audioCtx.destination);
+
+        const graphMasterAnalyser = audioCtx.createAnalyser();
+        graphMasterAnalyser.fftSize = 1024;
+        graphMasterAnalyser.smoothingTimeConstant = 0.78;
+        const graphMasterMeterData = new Float32Array(graphMasterAnalyser.fftSize);
+
+        graphMasterGain.connect(graphMasterAnalyser);
+        graphMasterAnalyser.connect(audioCtx.destination);
 
         const graphNoiseGain = audioCtx.createGain();
         graphNoiseGain.gain.value = config.noise.volume;
@@ -853,6 +863,7 @@
 
         return {
           masterGain: graphMasterGain,
+          masterMeter: { analyser: graphMasterAnalyser, meterData: graphMasterMeterData },
           noiseGain: graphNoiseGain,
           noisePan: graphNoisePan,
           noiseTilt: graphNoiseTilt,
@@ -1353,8 +1364,8 @@
         try {
           navigator.mediaSession.metadata = new MediaMetadata({
             title: "aftertone",
-            artist: "notUnplanned",
-            album: "Ambient generator",
+            artist: "not-unplanned",
+            album: "procedural ambient music with white noise generator",
           });
         } catch { }
 
@@ -1424,10 +1435,14 @@
       }
 
       function meterLoop() {
-        const masterNow = 1.0; // getMasterVisualGain();
+        const masterLevel = clamp((readRms(masterMeter) - 0.0015) / 0.05, 0, 1);
         const noiseLevel = clamp((liveConfig.noise.volume - 0.004) / 0.09, 0, 1);
         const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1);
         const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1);
+
+        meterLevelMaster = masterLevel > meterLevelMaster
+          ? meterLevelMaster + (masterLevel - meterLevelMaster) * 0.45
+          : meterLevelMaster * 0.9;
 
         meterLevelNoise = noiseLevel > meterLevelNoise
           ? meterLevelNoise + (noiseLevel - meterLevelNoise) * 0.25
@@ -1441,11 +1456,13 @@
           : meterLevelB * 0.88;
 
         if (!running && !isStopping) {
+          meterLevelMaster *= 0.8;
           meterLevelNoise *= 0.8;
           meterLevelA *= 0.8;
           meterLevelB *= 0.8;
         }
 
+        setLedLevel(ui.masterLed, meterLevelMaster);
         setLedLevel(ui.noiseLed, meterLevelNoise);
         setLedLevel(ui.musicLedA, meterLevelA);
         setLedLevel(ui.musicLedB, meterLevelB);
@@ -1467,6 +1484,7 @@
 
         const graph = await buildGraph(ctx, liveConfig);
         masterGain = graph.masterGain;
+        masterMeter = graph.masterMeter;
         noiseGain = graph.noiseGain;
         noisePan = graph.noisePan;
         noiseTilt = graph.noiseTilt;
@@ -1607,12 +1625,15 @@
         // Close releases audio hardware/resources; old nodes become unusable after this.
         try { await ctx.close(); } catch { }
         ctx = null;
+        masterMeter = null;
         musicA = null;
         musicB = null;
         masterFade = null;
+        meterLevelMaster = 0;
         meterLevelNoise = 0;
         meterLevelA = 0;
         meterLevelB = 0;
+        setLedLevel(ui.masterLed, 0);
         setLedLevel(ui.noiseLed, 0);
         setLedLevel(ui.musicLedA, 0);
         setLedLevel(ui.musicLedB, 0);
