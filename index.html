@@ -198,7 +198,7 @@
     </div>
 
     <div class="card">
-      <h2>Download</h2>
+      <h2><span class="led" id="exportLed" aria-hidden="true"></span>Download</h2>
       <button id="exportTrack">Export 864s MP3</button>
       <div class="tiny">Export renders an 864 second MP3 snapshot with tags and artwork. This can take a minute.</div>
     </div>
@@ -291,6 +291,7 @@
       const ui = {
         toggle: $("toggle"),
         exportTrack: $("exportTrack"),
+        exportLed: $("exportLed"),
         status: $("status"),
         master: $("master"),
         noiseVol: $("noiseVol"),
@@ -530,6 +531,10 @@
       let meterLevelNoise = 0;
       let meterLevelA = 0;
       let meterLevelB = 0;
+      let meterLevelExport = 0;
+      let exportLedPhase = "idle";
+      let exportLedPhaseStartedAtMs = performance.now();
+      let exportLedEncodingProgress = 0;
 
       // nodes
       let masterMeter = null;
@@ -1233,13 +1238,74 @@
         return `Export ${EXPORT_DURATION_SEC}s MP3`;
       }
 
+      function setExportLedPhase(phase) {
+        const nextPhase = typeof phase === "string" ? phase : "idle";
+        if (nextPhase === exportLedPhase) return;
+        exportLedPhase = nextPhase;
+        exportLedPhaseStartedAtMs = performance.now();
+        if (nextPhase !== "encoding") exportLedEncodingProgress = 0;
+      }
+
+      function setExportLedEncodingProgress(progress01) {
+        exportLedEncodingProgress = clamp(progress01, 0, 1);
+      }
+
+      function getExportLedLevel(nowMs) {
+        const elapsedMs = Math.max(0, nowMs - exportLedPhaseStartedAtMs);
+
+        if (exportLedPhase === "loading") {
+          const cycleMs = elapsedMs % 1300;
+          const pulseA = Math.max(0, 1 - Math.abs(cycleMs - 180) / 150);
+          const pulseB = Math.max(0, 1 - Math.abs(cycleMs - 430) / 150);
+          return 0.24 + Math.max(pulseA, pulseB) * 0.20;
+        }
+
+        if (exportLedPhase === "rendering") {
+          const wave = 0.5 + 0.5 * Math.sin((elapsedMs / 1000) * Math.PI * 2 * 0.42);
+          return 0.55 + wave * 0.20;
+        }
+
+        if (exportLedPhase === "encoding") {
+          const wave = 0.5 + 0.5 * Math.sin((elapsedMs / 1000) * Math.PI * 2 * 1.6);
+          const base = 0.45 + exportLedEncodingProgress * 0.47;
+          return clamp(base + wave * 0.05, 0, 1);
+        }
+
+        if (exportLedPhase === "tagging") {
+          const wave = 0.5 + 0.5 * Math.sin((elapsedMs / 1000) * Math.PI * 2 * 2.4);
+          return 0.80 + wave * 0.15;
+        }
+
+        if (exportLedPhase === "success") {
+          if (elapsedMs < 180) return 1;
+          const t = clamp((elapsedMs - 180) / 850, 0, 1);
+          return 1 - t;
+        }
+
+        if (exportLedPhase === "error") {
+          if (elapsedMs < 620) {
+            const pulseA = Math.max(0, 1 - Math.abs(elapsedMs - 120) / 130);
+            const pulseB = Math.max(0, 1 - Math.abs(elapsedMs - 360) / 130);
+            return 0.08 + Math.max(pulseA, pulseB) * 0.82;
+          }
+          const t = clamp((elapsedMs - 620) / 900, 0, 1);
+          return (1 - t) * 0.28;
+        }
+
+        return 0;
+      }
+
       async function exportTrackMp3() {
         if (isExportingTrack) return;
 
         const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
         if (!OfflineCtx) {
           ui.exportTrack.textContent = "Offline N/A";
-          setTimeout(() => { ui.exportTrack.textContent = getExportTrackLabel(); }, 1400);
+          setExportLedPhase("error");
+          setTimeout(() => {
+            ui.exportTrack.textContent = getExportTrackLabel();
+            setExportLedPhase("idle");
+          }, 1400);
           return;
         }
 
@@ -1258,6 +1324,8 @@
         };
 
         isExportingTrack = true;
+        setExportLedEncodingProgress(0);
+        setExportLedPhase("loading");
         ui.exportTrack.disabled = true;
         ui.exportTrack.textContent = "Loading codecs...";
 
@@ -1265,6 +1333,7 @@
           const { Mp3Encoder, ID3Writer } = await loadExportCodecModules();
           const artworkBytes = await getExportArtworkBytes().catch(() => null);
 
+          setExportLedPhase("rendering");
           ui.exportTrack.textContent = "Rendering...";
 
           const frameCount = Math.ceil(EXPORT_DURATION_SEC * EXPORT_SAMPLE_RATE);
@@ -1305,9 +1374,11 @@
           });
 
           const rendered = await offlineCtx.startRendering();
+          setExportLedPhase("encoding");
           ui.exportTrack.textContent = "Encoding MP3...";
 
           const mp3Bytes = await encodeAudioBufferToMp3(rendered, EXPORT_MP3_BITRATE_KBPS, Mp3Encoder, (progress01) => {
+            setExportLedEncodingProgress(progress01);
             if (progress01 >= 0.999) return;
             const pct = Math.floor(progress01 * 100);
             ui.exportTrack.textContent = `Encoding ${pct}%...`;
@@ -1315,6 +1386,7 @@
 
           const fullYear = new Date().getFullYear();
 
+          setExportLedPhase("tagging");
           ui.exportTrack.textContent = "Tagging...";
           const taggedMp3 = addId3Tags(mp3Bytes, ID3Writer, {
             title: "aftertone",
@@ -1331,6 +1403,7 @@
           const fileName = `aftertone-${EXPORT_DURATION_SEC}s-${exportSeed}.mp3`;
           downloadBlob(new Blob([taggedMp3], { type: "audio/mpeg" }), fileName);
 
+          setExportLedPhase("success");
           ui.exportTrack.textContent = "Exported";
           if (DEBUG_RUNTIME) {
             const nudgeA = Math.max(0, brightnessTimelineA.length - 1);
@@ -1338,6 +1411,7 @@
             console.debug(`[aftertone] export seed=${exportSeed} notesA=${noteCountA} notesB=${noteCountB} nudgesA=${nudgeA} nudgesB=${nudgeB} file=${fileName}`);
           }
         } catch (err) {
+          setExportLedPhase("error");
           ui.exportTrack.textContent = "Export failed";
           console.error("[aftertone] export failed", err);
         } finally {
@@ -1345,6 +1419,7 @@
           setTimeout(() => {
             ui.exportTrack.disabled = false;
             ui.exportTrack.textContent = getExportTrackLabel();
+            setExportLedPhase("idle");
           }, 1400);
         }
       }
@@ -1435,10 +1510,12 @@
       }
 
       function meterLoop() {
+        const nowMs = performance.now();
         const masterLevel = clamp((readRms(masterMeter) - 0.0015) / 0.05, 0, 1);
         const noiseLevel = clamp((liveConfig.noise.volume - 0.004) / 0.09, 0, 1);
         const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1);
         const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1);
+        const exportLevel = getExportLedLevel(nowMs);
 
         meterLevelMaster = masterLevel > meterLevelMaster
           ? meterLevelMaster + (masterLevel - meterLevelMaster) * 0.45
@@ -1455,6 +1532,10 @@
           ? meterLevelB + (meterB - meterLevelB) * 0.45
           : meterLevelB * 0.88;
 
+        meterLevelExport = exportLevel > meterLevelExport
+          ? meterLevelExport + (exportLevel - meterLevelExport) * 0.7
+          : meterLevelExport + (exportLevel - meterLevelExport) * 0.2;
+
         if (!running && !isStopping) {
           meterLevelMaster *= 0.8;
           meterLevelNoise *= 0.8;
@@ -1466,6 +1547,7 @@
         setLedLevel(ui.noiseLed, meterLevelNoise);
         setLedLevel(ui.musicLedA, meterLevelA);
         setLedLevel(ui.musicLedB, meterLevelB);
+        setLedLevel(ui.exportLed, meterLevelExport);
 
         requestAnimationFrame(meterLoop);
       }
