@@ -10,7 +10,7 @@ aftertone is a single-page, no-build Web Audio instrument with three sound sourc
 - **Tonal generator A** (slow, sparse generative notes).
 - **Tonal generator B** (offset companion voice with different profile).
 
-All sources are mixed into a shared `masterGain` and then routed to `AudioContext.destination`.
+All sources are mixed into a shared `masterGain`, metered by a master `AnalyserNode`, and then routed to `AudioContext.destination`.
 
 The script is wrapped in an IIFE so state remains private and no app globals leak into `window` (except optional debug diagnostics when explicitly enabled).
 
@@ -32,7 +32,7 @@ Control values are normalized from slider ranges into `0..1` where practical, th
 
 ```text
 [Noise chain] ----\
-[Music chain A] ---+--> masterGain --> destination
+[Music chain A] ---+--> masterGain --> master analyser --> destination
 [Music chain B] ---/
 ```
 
@@ -149,7 +149,7 @@ These diagnostics are opt-in and do not affect normal playback behavior.
 
 ## 9) Metering and LED feedback
 
-- Each music chain has an `AnalyserNode`; RMS is computed from time-domain samples.
+- Each music chain plus the master path has an `AnalyserNode`; RMS is computed from time-domain samples.
 - Meter smoothing is asymmetric (faster rise, slower decay).
 - Noise LED level is inferred from control value for stable visual feedback.
 

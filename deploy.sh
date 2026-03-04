@@ -7,6 +7,8 @@ do
   cp "$F" ./docs/
 done
 
+cp ./favicons ./docs/ 
+
 git add docs
 git commit -m "Deploy"
 git push
