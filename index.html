@@ -212,7 +212,7 @@
       <div class="ctrl">
         <label for="noiseVol">Noise volume</label>
         <input id="noiseVol" type="range" min="0.0" max="100" value="1">
-        <div class="val" id="noiseVolVal">0.02</div>
+        <div class="val" id="noiseVolVal">0.0025</div>
       </div>
 
       <div class="ctrl">
@@ -286,7 +286,10 @@
     (() => {
       // ---------- UI helpers ----------
       const $ = (id) => document.getElementById(id);
-      const setVal = (id, v) => $(id).textContent = v.toFixed(2);
+      const setVal = (id, v) => {
+        const text = typeof v === "number" ? v.toFixed(2) : String(v);
+        $(id).textContent = text;
+      };
 
       const ui = {
         toggle: $("toggle"),
@@ -362,6 +365,11 @@
       const EXPORT_LIB_ID3_URL = "https://cdn.jsdelivr.net/npm/browser-id3-writer@6.3.1/dist/browser-id3-writer.mjs";
       const EXPORT_ID3_GENRE = "Ambient";
       const EXPORT_ID3_GENRE_ID = 26;
+      const NOISE_PERCEPTUAL_MIN_DB = -52;
+      const NOISE_PERCEPTUAL_MAX_DB = -2;
+      const NOISE_PERCEPTUAL_CURVE = 1.85;
+      const NOISE_PERCEPTUAL_MIN_GAIN = Math.pow(10, NOISE_PERCEPTUAL_MIN_DB / 20);
+      const NOISE_PERCEPTUAL_MAX_GAIN = Math.pow(10, NOISE_PERCEPTUAL_MAX_DB / 20);
       const MUSIC_NUDGE_STEP = 0.03;
       const MUSIC_NUDGE_MAX = 0.12;
       const MUSIC_NUDGE_TIMING = {
@@ -381,6 +389,58 @@
 
       function finiteOr(value, fallback) {
         return Number.isFinite(value) ? value : fallback;
+      }
+
+      function dbToGain(db) {
+        return Math.pow(10, finiteOr(db, 0) / 20);
+      }
+
+      function gainToDb(gain) {
+        return 20 * Math.log10(Math.max(1e-6, finiteOr(gain, 1)));
+      }
+
+      function mapNoiseVolumeToGain(control01) {
+        const control = clamp(finiteOr(control01, 0), 0, 1);
+        const shaped = Math.pow(control, NOISE_PERCEPTUAL_CURVE);
+        const db = NOISE_PERCEPTUAL_MIN_DB + (NOISE_PERCEPTUAL_MAX_DB - NOISE_PERCEPTUAL_MIN_DB) * shaped;
+        return clamp(dbToGain(db), NOISE_PERCEPTUAL_MIN_GAIN, NOISE_PERCEPTUAL_MAX_GAIN);
+      }
+
+      function formatNoiseVolumeReadout(gain) {
+        const safeGain = clamp(finiteOr(gain, NOISE_PERCEPTUAL_MIN_GAIN), NOISE_PERCEPTUAL_MIN_GAIN, NOISE_PERCEPTUAL_MAX_GAIN);
+        if (safeGain < 0.01) return safeGain.toFixed(4);
+        if (safeGain < 0.1) return safeGain.toFixed(3);
+        return safeGain.toFixed(2);
+      }
+
+      function getSourceMixerLevels(config) {
+        const safeConfig = config || {};
+        const safeMixer = safeConfig.sourceMixer || {};
+        const noise = finiteOr(safeMixer.noise, finiteOr(safeConfig.noise && safeConfig.noise.volume, 0));
+        const voiceA = finiteOr(safeMixer.voiceA, finiteOr(safeConfig.voices && safeConfig.voices.a && safeConfig.voices.a.musicVol, 0));
+        const voiceB = finiteOr(safeMixer.voiceB, finiteOr(safeConfig.voices && safeConfig.voices.b && safeConfig.voices.b.musicVol, 0));
+        return {
+          noise: clamp(noise, 0, 1),
+          voiceA: clamp(voiceA, 0, 1),
+          voiceB: clamp(voiceB, 0, 1),
+        };
+      }
+
+      function setSourceMixerLevelsAtTime(sourceMixer, levels, timeSec) {
+        if (!sourceMixer || !levels) return;
+        const t = Math.max(0, finiteOr(timeSec, 0));
+        if (sourceMixer.noise) sourceMixer.noise.gain.setValueAtTime(clamp(finiteOr(levels.noise, 0), 0, 1), t);
+        if (sourceMixer.voiceA) sourceMixer.voiceA.gain.setValueAtTime(clamp(finiteOr(levels.voiceA, 0), 0, 1), t);
+        if (sourceMixer.voiceB) sourceMixer.voiceB.gain.setValueAtTime(clamp(finiteOr(levels.voiceB, 0), 0, 1), t);
+      }
+
+      function applySourceMixerChannelLevel(audioCtx, sourceMixer, channelId, level, timeConstantSec = 0.05) {
+        if (!audioCtx || !sourceMixer || !channelId) return;
+        const channel = sourceMixer[channelId];
+        if (!channel) return;
+        const now = audioCtx.currentTime;
+        const tc = Math.max(0.0001, finiteOr(timeConstantSec, 0.05));
+        channel.gain.setTargetAtTime(clamp(finiteOr(level, 0), 0, 1), now, tc);
       }
 
       function sanitizeVoiceState(voiceState) {
@@ -437,24 +497,36 @@
       }
 
       function getEngineConfigFromUI(ui) {
+        const noiseControl = clamp(r01(ui.noiseVol.value), 0, 1);
+        const noiseVolume = mapNoiseVolumeToGain(noiseControl);
+        const musicVolA = clamp(r01(ui.musicVol.value), 0, 1);
+        const musicVolB = clamp(r01(ui.musicVol2.value), 0, 1);
+
         return {
           master: r01(ui.master.value),
           noise: {
-            volume: clamp(r01(ui.noiseVol.value), 0.01, 1.00),
+            control: noiseControl,
+            volume: noiseVolume,
+            db: gainToDb(noiseVolume),
             color: r01(ui.noiseColor.value),
             pan: ui.noisePan.value / 100,
           },
           voices: {
             a: {
-              musicVol: r01(ui.musicVol.value),
+              musicVol: musicVolA,
               density: r01(ui.density.value),
               brightness: r01(ui.brightness.value),
             },
             b: {
-              musicVol: r01(ui.musicVol2.value),
+              musicVol: musicVolB,
               density: r01(ui.density2.value),
               brightness: r01(ui.brightness2.value),
             },
+          },
+          sourceMixer: {
+            noise: noiseVolume,
+            voiceA: musicVolA,
+            voiceB: musicVolB,
           },
         };
       }
@@ -539,6 +611,7 @@
       // nodes
       let masterMeter = null;
       let masterGain, noiseGain, noisePan, noiseTilt, noiseLP, noiseWorklet;
+      let sourceMixer = null;
       let musicA = null;
       let musicB = null;
       let schedulerAbortA = { aborted: false };
@@ -799,6 +872,7 @@
       async function buildGraph(audioCtx, config, options = {}) {
         const offlineRenderDurationSec = Math.max(0, finiteOr(options.offlineRenderDurationSec, 0));
         const noiseRandom = typeof options.noiseRandom === "function" ? options.noiseRandom : random01;
+        const sourceLevels = getSourceMixerLevels(config);
 
         const graphMasterGain = audioCtx.createGain();
         graphMasterGain.gain.value = 0;
@@ -812,7 +886,7 @@
         graphMasterAnalyser.connect(audioCtx.destination);
 
         const graphNoiseGain = audioCtx.createGain();
-        graphNoiseGain.gain.value = config.noise.volume;
+        graphNoiseGain.gain.value = 0;
 
         const t0 = audioCtx.currentTime;
         const noiseMod = audioCtx.createOscillator();
@@ -863,12 +937,19 @@
         graphNoiseGain.connect(graphMasterGain);
 
         const { voiceA, voiceB } = getVoiceProfiles();
-        const graphMusicA = buildMusicChain(audioCtx, graphMasterGain, config.voices.a.musicVol, voiceA);
-        const graphMusicB = buildMusicChain(audioCtx, graphMasterGain, config.voices.b.musicVol, voiceB);
+        const graphMusicA = buildMusicChain(audioCtx, graphMasterGain, 0, voiceA);
+        const graphMusicB = buildMusicChain(audioCtx, graphMasterGain, 0, voiceB);
+        const graphSourceMixer = {
+          noise: graphNoiseGain,
+          voiceA: graphMusicA.musicGain,
+          voiceB: graphMusicB.musicGain,
+        };
+        setSourceMixerLevelsAtTime(graphSourceMixer, sourceLevels, t0);
 
         return {
           masterGain: graphMasterGain,
           masterMeter: { analyser: graphMasterAnalyser, meterData: graphMasterMeterData },
+          sourceMixer: graphSourceMixer,
           noiseGain: graphNoiseGain,
           noisePan: graphNoisePan,
           noiseTilt: graphNoiseTilt,
@@ -1313,13 +1394,18 @@
         const config = {
           master: liveConfig.master,
           noise: {
+            control: liveConfig.noise.control,
             volume: liveConfig.noise.volume,
+            db: liveConfig.noise.db,
             color: liveConfig.noise.color,
             pan: liveConfig.noise.pan,
           },
           voices: {
             a: { ...liveConfig.voices.a },
             b: { ...liveConfig.voices.b },
+          },
+          sourceMixer: {
+            ...liveConfig.sourceMixer,
           },
         };
 
@@ -1512,7 +1598,7 @@
       function meterLoop() {
         const nowMs = performance.now();
         const masterLevel = clamp((readRms(masterMeter) - 0.0015) / 0.05, 0, 1);
-        const noiseLevel = clamp((liveConfig.noise.volume - 0.004) / 0.09, 0, 1);
+        const noiseLevel = clamp((liveConfig.noise.volume - NOISE_PERCEPTUAL_MIN_GAIN) / (NOISE_PERCEPTUAL_MAX_GAIN - NOISE_PERCEPTUAL_MIN_GAIN), 0, 1);
         const meterA = clamp((readRms(musicA) - 0.0015) / 0.05, 0, 1);
         const meterB = clamp((readRms(musicB) - 0.0015) / 0.05, 0, 1);
         const exportLevel = getExportLedLevel(nowMs);
@@ -1567,6 +1653,7 @@
         const graph = await buildGraph(ctx, liveConfig);
         masterGain = graph.masterGain;
         masterMeter = graph.masterMeter;
+        sourceMixer = graph.sourceMixer;
         noiseGain = graph.noiseGain;
         noisePan = graph.noisePan;
         noiseTilt = graph.noiseTilt;
@@ -1588,6 +1675,7 @@
         };
 
         // apply initial params
+        setSourceMixerLevelsAtTime(sourceMixer, liveConfig.sourceMixer, startTime);
         applyNoiseColor(liveConfig.noise.color);
         applyMusicBrightness(clamp(liveConfig.voices.a.brightness + musicBrightOffsetA, 0, 1), musicA.musicLP);
         applyMusicBrightness(clamp(liveConfig.voices.b.brightness + musicBrightOffsetB, 0, 1), musicB.musicLP);
@@ -1708,6 +1796,7 @@
         try { await ctx.close(); } catch { }
         ctx = null;
         masterMeter = null;
+        sourceMixer = null;
         musicA = null;
         musicB = null;
         masterFade = null;
@@ -1737,7 +1826,7 @@
       function refreshUI() {
         const cfg = refreshLiveConfig();
         setVal("masterVal", cfg.master);
-        setVal("noiseVolVal", cfg.noise.volume);
+        setVal("noiseVolVal", formatNoiseVolumeReadout(cfg.noise.volume));
         setVal("noiseColorVal", cfg.noise.color);
         setVal("noisePanVal", cfg.noise.pan);
         setVal("musicVolVal", cfg.voices.a.musicVol);
@@ -1771,7 +1860,7 @@
 
         ui.noiseVol.addEventListener("input", () => {
           refreshUI();
-          if (ctx && noiseGain) noiseGain.gain.setTargetAtTime(liveConfig.noise.volume, ctx.currentTime, 0.05);
+          if (ctx && sourceMixer) applySourceMixerChannelLevel(ctx, sourceMixer, "noise", liveConfig.sourceMixer.noise, 0.05);
         });
 
         ui.noisePan.addEventListener("input", () => {
@@ -1786,7 +1875,7 @@
 
         ui.musicVol.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicA) musicA.musicGain.gain.setTargetAtTime(liveConfig.voices.a.musicVol, ctx.currentTime, 0.06);
+          if (ctx && sourceMixer) applySourceMixerChannelLevel(ctx, sourceMixer, "voiceA", liveConfig.sourceMixer.voiceA, 0.06);
         });
 
         ui.brightness.addEventListener("input", () => {
@@ -1799,7 +1888,7 @@
 
         ui.musicVol2.addEventListener("input", () => {
           refreshUI();
-          if (ctx && musicB) musicB.musicGain.gain.setTargetAtTime(liveConfig.voices.b.musicVol, ctx.currentTime, 0.06);
+          if (ctx && sourceMixer) applySourceMixerChannelLevel(ctx, sourceMixer, "voiceB", liveConfig.sourceMixer.voiceB, 0.06);
         });
 
         ui.brightness2.addEventListener("input", () => {

@@ -14,8 +14,10 @@ Use this checklist after refactors that touch scheduling, gain staging, or UI wi
 
 - [ ] `Master volume` changes overall level smoothly while running.
 - [ ] `Noise volume`, `Noise color`, and `Noise pan` respond smoothly while running.
+- [ ] In the lowest 20% of `Noise volume`, 1-2 step slider moves produce fine, audible-but-small level changes.
 - [ ] `Music volume`, `Density`, and `Brightness` for generator A respond while running.
 - [ ] `Music volume`, `Density`, and `Brightness` for generator B respond while running.
+- [ ] Sweeping `Noise volume` changes only noise balance; sweeping each `Music volume` changes only its corresponding tonal voice balance.
 - [ ] No audible clicks/pops during normal slider movement.
 
 ## Voice activity and meters
@@ -35,5 +37,6 @@ Use this checklist after refactors that touch scheduling, gain staging, or UI wi
 - [ ] Leave running for 5+ minutes: no runaway CPU symptoms, no lockups.
 - [ ] Stop while notes are active: fade-out remains smooth.
 - [ ] Reload page and verify defaults are restored.
+- [ ] Confirm the three source channels (`Noise`, `Music A`, `Music B`) can each be faded from low to high without destabilizing the other channels.
 - [ ] Click `Export 864s MP3` and verify an MP3 file downloads with artwork and ID3 genre `Ambient` (ID `26`).
 - [ ] Run `node generation-regression-check.cjs` and confirm it passes.
