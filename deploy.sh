@@ -2,12 +2,12 @@
 set -ex
 
 rm -rf docs/*
-for F in *.html *.ico *.png LICENSE
+for F in *.html  LICENSE
 do
   cp "$F" ./docs/
 done
 
-cp ./favicons ./docs/ 
+cp -r ./favicons ./docs/ 
 
 git add docs
 git commit -m "Deploy"
