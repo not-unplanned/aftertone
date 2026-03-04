@@ -31,6 +31,7 @@ Use this checklist after refactors that touch scheduling, gain staging, or UI wi
 
 - [ ] OS/media hardware play/pause controls work when supported.
 - [ ] Pause transitions are smooth and resume returns to running state.
+- [ ] Spacebar toggles transport: stopped -> start, running -> pause, paused -> resume.
 
 ## Regression quick pass
 

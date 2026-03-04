@@ -19,7 +19,7 @@ The script is wrapped in an IIFE so state remains private and no app globals lea
 `index.html` contains:
 
 - UI controls for master, noise, and both tonal voices.
-- Status and transport (`Start`/`Stop`) plus Media Session bindings.
+- Status and transport (`Start`/`Stop`) plus Media Session and keyboard (Spacebar) bindings.
 - Export transport (`Export 864s MP3`) for offline library use.
 - LED meters driven by analyser RMS values.
 - Inline script that owns graph construction, composition, scheduling, modulation, and UI wiring.
@@ -181,7 +181,7 @@ Stop sequence:
 
 Closing the context is important for hardware/resource release.
 
-## 11) Media Session and hardware keys
+## 11) Media Session, hardware keys, and keyboard transport
 
 aftertone registers browser Media Session handlers:
 
@@ -189,9 +189,20 @@ aftertone registers browser Media Session handlers:
 - `pause`: fade then suspend.
 - `stop`: full teardown (`close()`).
 
+aftertone also registers a guarded Spacebar transport shortcut on `keydown`:
+
+- Stopped -> start.
+- Running -> pause.
+- Paused/suspended -> resume.
+- Ignores repeated keydown, modifier combos (`Ctrl`/`Alt`/`Meta`), and editable/interactive targets.
+- Calls `preventDefault()` only when the Spacebar transport shortcut is accepted.
+
+This behavior is centralized through a shared play/pause transport intent helper so Media Session `play` and Spacebar use the same state mapping.
+
 Why it matters:
 
 - OS media keys route through media sessions, not regular keyboard handlers.
+- Spacebar gives a fast in-tab transport control path without adding UI complexity.
 - Suspend/resume keeps graph state alive and avoids abrupt cutoff artifacts.
 
 ## 12) Export pipeline (864s MP3)

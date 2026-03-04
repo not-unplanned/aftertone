@@ -1521,6 +1521,20 @@
         } catch { }
       }
 
+      async function togglePlayPauseTransport() {
+        if (!running) {
+          await start();
+          return;
+        }
+
+        if (isPaused || (ctx && ctx.state === "suspended")) {
+          await resume();
+          return;
+        }
+
+        await pause();
+      }
+
       function setupMediaSession() {
         if (!("mediaSession" in navigator)) return;
 
@@ -1539,11 +1553,8 @@
         };
 
         bindAction("play", async () => {
-          if (!running) {
-            await start();
-            return;
-          }
-          if (isPaused || (ctx && ctx.state === "suspended")) await resume();
+          if (running && !isPaused && (!ctx || ctx.state !== "suspended")) return;
+          await togglePlayPauseTransport();
         });
 
         bindAction("pause", async () => {
@@ -1844,6 +1855,23 @@
         meterLoop();
         setupMediaSession();
         ui.exportTrack.textContent = getExportTrackLabel();
+
+        document.addEventListener("keydown", async (event) => {
+          const isSpace = event.code === "Space" || event.key === " " || event.key === "Spacebar";
+          if (!isSpace) return;
+          if (event.repeat) return;
+          if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+          const target = event.target;
+          if (target instanceof HTMLElement) {
+            if (target.isContentEditable) return;
+            const tag = target.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+          }
+
+          event.preventDefault();
+          await togglePlayPauseTransport();
+        });
 
         ui.toggle.addEventListener("click", async () => {
           if (!running) await start();
