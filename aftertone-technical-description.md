@@ -1,6 +1,6 @@
 # aftertone Technical Description
 
-This document explains the current `index.html` implementation used by aftertone, with a focus on structure, Web Audio graph design, scheduling behavior, and the built-in offline export path.
+This document explains the current `index.html` + `js/` module implementation used by aftertone, with a focus on structure, Web Audio graph design, scheduling behavior, and the built-in offline export path.
 
 ## 1) High-level architecture
 
@@ -12,7 +12,7 @@ aftertone is a single-page, no-build Web Audio instrument with three sound sourc
 
 All sources are mixed into a shared `masterGain`, metered by a master `AnalyserNode`, and then routed to `AudioContext.destination`.
 
-The script is wrapped in an IIFE so state remains private and no app globals leak into `window` (except optional debug diagnostics when explicitly enabled).
+Runtime state lives in ES modules, so app state remains private and no app globals leak into `window` (except optional debug diagnostics when explicitly enabled).
 
 ## 2) Page/runtime structure
 
@@ -22,9 +22,19 @@ The script is wrapped in an IIFE so state remains private and no app globals lea
 - Status and transport (`Start`/`Stop`) plus Media Session and keyboard (Spacebar) bindings.
 - Export transport (`Export 864s MP3`) for offline library use.
 - LED meters driven by analyser RMS values.
-- Inline script that owns graph construction, composition, scheduling, modulation, and UI wiring.
+- ES module entrypoint `js/app.js` with supporting modules under `js/audio/*`, `js/ui/*`, and `js/shared/*`.
 
 Control values are normalized from slider ranges into `0..1` where practical, then captured in a single runtime snapshot object (`liveConfig`) via `getEngineConfigFromUI(ui)`.
+
+Module map (expected contents):
+
+- `js/app.js`: runtime state, transport, meters, and glue between UI and audio modules.
+- `js/audio/constants.js`: shared constants for audio, export, and timing behavior.
+- `js/audio/engine.js`: audio graph wiring (noise/music chains) and node helpers.
+- `js/audio/voices.js`: tonal voice composition, scheduling, and profiles.
+- `js/audio/export.js`: offline render + MP3 export pipeline and export LED state.
+- `js/ui/wiring.js`: DOM lookup, readouts, LED helpers, and event wiring.
+- `js/shared/utils.js`: shared math/RNG/timing helpers.
 
 ## 3) Audio graph overview
 
@@ -120,7 +130,7 @@ This keeps motion subtle without obvious continuous automation.
 
 ## 7) Graph adapter and lifecycle
 
-Graph construction now routes through `buildGraph(audioCtx, config)`:
+Graph construction now routes through `buildGraph(audioCtx, config)` in `js/audio/engine.js`:
 
 - Builds master/noise/music chains.
 - Returns node references plus voice profiles.
@@ -212,7 +222,7 @@ aftertone now includes an offline export pipeline that reuses the shared composi
 High-level flow:
 
 1. Snapshot current normalized UI settings.
-2. Build an `OfflineAudioContext` graph for `864s` (`32kHz`, stereo).
+2. Build an `OfflineAudioContext` graph for `864s` (44.1kHz, stereo).
 3. Render both voices via timeline composition (same core composer logic as runtime).
 4. Apply export-specific automation/polish.
 5. Encode rendered PCM to MP3.
@@ -229,7 +239,7 @@ Codec/tagging implementation:
 
 - MP3 encoding is done with `lamejs` in chunked blocks.
 - ID3 writing uses `browser-id3-writer` (title/artist/album/track/year/comment + genre `TCON` set to `Ambient` / ID `26`).
-- Artwork is read from `apple-touch-icon.png` and written to APIC.
+- Artwork is read from `aftertone.png` and written to APIC.
 
 Loading/perf strategy:
 
