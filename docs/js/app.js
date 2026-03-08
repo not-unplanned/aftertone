@@ -8,6 +8,11 @@ import {
   sleep,
 } from "./shared/utils.js";
 import {
+  applyTimeBasedVoiceSettings,
+  createTimeSource,
+  DEFAULT_TIME_BASED_VOICE_SCHEDULE,
+} from "./shared/time-based-voice-settings.js";
+import {
   DEBUG_RUNTIME,
   FADE_IN_SEC,
   FADE_OUT_SEC,
@@ -48,6 +53,23 @@ import {
 const ui = getUiElements();
 let liveConfig = null;
 let random01 = Math.random;
+const timeSource = createTimeSource();
+const timeBasedVoiceSchedule = DEFAULT_TIME_BASED_VOICE_SCHEDULE;
+
+function getEffectiveVoices(now = timeSource.now()) {
+  if (!liveConfig || !liveConfig.voices) return null;
+  return applyTimeBasedVoiceSettings(liveConfig.voices, timeBasedVoiceSchedule, now);
+}
+
+function getEffectiveConfig(now = timeSource.now()) {
+  if (!liveConfig) return null;
+  const voices = getEffectiveVoices(now);
+  if (!voices) return liveConfig;
+  return {
+    ...liveConfig,
+    voices,
+  };
+}
 
 function setRandomSeed(seed) {
   random01 = createSeededRng(seed);
@@ -181,7 +203,8 @@ function scheduleMusicNudges() {
     }
     const delta = randBetween(-MUSIC_NUDGE_STEP, MUSIC_NUDGE_STEP);
     musicBrightOffsetA = clamp(musicBrightOffsetA + delta, -MUSIC_NUDGE_MAX, MUSIC_NUDGE_MAX);
-    const base = liveConfig.voices.a.brightness;
+    const effectiveVoices = getEffectiveVoices();
+    const base = effectiveVoices ? effectiveVoices.a.brightness : liveConfig.voices.a.brightness;
     applyMusicBrightness(ctx, clamp(base + musicBrightOffsetA, 0, 1), musicA.musicLP);
     const nextMs = Math.floor(randBetween(MUSIC_NUDGE_TIMING.a.nextMinSec * 1000, MUSIC_NUDGE_TIMING.a.nextMaxSec * 1000));
     modTimers.push(setTimeout(nudgeA, nextMs));
@@ -195,7 +218,8 @@ function scheduleMusicNudges() {
     }
     const delta = randBetween(-MUSIC_NUDGE_STEP, MUSIC_NUDGE_STEP);
     musicBrightOffsetB = clamp(musicBrightOffsetB + delta, -MUSIC_NUDGE_MAX, MUSIC_NUDGE_MAX);
-    const base = liveConfig.voices.b.brightness;
+    const effectiveVoices = getEffectiveVoices();
+    const base = effectiveVoices ? effectiveVoices.b.brightness : liveConfig.voices.b.brightness;
     applyMusicBrightness(ctx, clamp(base + musicBrightOffsetB, 0, 1), musicB.musicLP);
     const nextMs = Math.floor(randBetween(MUSIC_NUDGE_TIMING.b.nextMinSec * 1000, MUSIC_NUDGE_TIMING.b.nextMaxSec * 1000));
     modTimers.push(setTimeout(nudgeB, nextMs));
@@ -346,8 +370,11 @@ async function start() {
   // apply initial params
   setSourceMixerLevelsAtTime(sourceMixer, liveConfig.sourceMixer, startTime);
   applyNoiseColor(ctx, noiseLP, noiseTilt, liveConfig.noise.color);
-  applyMusicBrightness(ctx, clamp(liveConfig.voices.a.brightness + musicBrightOffsetA, 0, 1), musicA.musicLP);
-  applyMusicBrightness(ctx, clamp(liveConfig.voices.b.brightness + musicBrightOffsetB, 0, 1), musicB.musicLP);
+  const effectiveVoices = getEffectiveVoices();
+  const voiceAState = effectiveVoices ? effectiveVoices.a : liveConfig.voices.a;
+  const voiceBState = effectiveVoices ? effectiveVoices.b : liveConfig.voices.b;
+  applyMusicBrightness(ctx, clamp(voiceAState.brightness + musicBrightOffsetA, 0, 1), musicA.musicLP);
+  applyMusicBrightness(ctx, clamp(voiceBState.brightness + musicBrightOffsetB, 0, 1), musicB.musicLP);
 
   // start schedulers
   schedulerAbortA = { aborted: false };
@@ -368,7 +395,10 @@ async function start() {
   schedulerLoop({
     abortToken: schedulerAbortA,
     audioCtx: ctx,
-    getVoiceState: () => liveConfig.voices.a,
+    getVoiceState: () => {
+      const effectiveVoices = getEffectiveVoices();
+      return effectiveVoices ? effectiveVoices.a : liveConfig.voices.a;
+    },
     renderNoteAtTime: renderVoiceA,
     profile: voiceA,
     metrics: metricsA,
@@ -378,7 +408,10 @@ async function start() {
   schedulerLoop({
     abortToken: schedulerAbortB,
     audioCtx: ctx,
-    getVoiceState: () => liveConfig.voices.b,
+    getVoiceState: () => {
+      const effectiveVoices = getEffectiveVoices();
+      return effectiveVoices ? effectiveVoices.b : liveConfig.voices.b;
+    },
     renderNoteAtTime: renderVoiceB,
     profile: voiceB,
     metrics: metricsB,
@@ -522,8 +555,9 @@ async function stop() {
 // ---------- UI wiring ----------
 function handleExportClick() {
   refreshUI();
+  const effectiveConfig = getEffectiveConfig();
   return exportTrackMp3({
-    config: liveConfig,
+    config: effectiveConfig || liveConfig,
     updateUi: ({ text, disabled }) => {
       if (typeof text === "string") ui.exportTrack.textContent = text;
       if (typeof disabled === "boolean") ui.exportTrack.disabled = disabled;
@@ -567,7 +601,11 @@ function init() {
     },
     onBrightnessInput: () => {
       refreshUI();
-      if (ctx && musicA) applyMusicBrightness(ctx, clamp(liveConfig.voices.a.brightness + musicBrightOffsetA, 0, 1), musicA.musicLP);
+      if (ctx && musicA) {
+        const effectiveVoices = getEffectiveVoices();
+        const base = effectiveVoices ? effectiveVoices.a.brightness : liveConfig.voices.a.brightness;
+        applyMusicBrightness(ctx, clamp(base + musicBrightOffsetA, 0, 1), musicA.musicLP);
+      }
     },
     onDensityInput: refreshUI,
     onMusicVol2Input: () => {
@@ -576,7 +614,11 @@ function init() {
     },
     onBrightness2Input: () => {
       refreshUI();
-      if (ctx && musicB) applyMusicBrightness(ctx, clamp(liveConfig.voices.b.brightness + musicBrightOffsetB, 0, 1), musicB.musicLP);
+      if (ctx && musicB) {
+        const effectiveVoices = getEffectiveVoices();
+        const base = effectiveVoices ? effectiveVoices.b.brightness : liveConfig.voices.b.brightness;
+        applyMusicBrightness(ctx, clamp(base + musicBrightOffsetB, 0, 1), musicB.musicLP);
+      }
     },
     onDensity2Input: refreshUI,
   });
