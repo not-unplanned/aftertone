@@ -7,7 +7,10 @@ do
   cp "$F" ./docs/
 done
 
-cp -r ./favicons ./docs/ 
+for D in ./favicons ./js
+do
+  cp -r "$D" ./docs/
+done
 
 git add docs
 git commit -m "Deploy"
