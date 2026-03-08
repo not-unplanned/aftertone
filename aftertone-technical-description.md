@@ -25,6 +25,7 @@ Runtime state lives in ES modules, so app state remains private and no app globa
 - ES module entrypoint `js/app.js` with supporting modules under `js/audio/*`, `js/ui/*`, and `js/shared/*`.
 
 Control values are normalized from slider ranges into `0..1` where practical, then captured in a single runtime snapshot object (`liveConfig`) via `getEngineConfigFromUI(ui)`.
+Effective voice settings are derived by applying the optional time-of-day schedule to `liveConfig.voices` right before scheduling/rendering.
 
 Module map (expected contents):
 
@@ -35,6 +36,7 @@ Module map (expected contents):
 - `js/audio/export.js`: offline render + MP3 export pipeline and export LED state.
 - `js/ui/wiring.js`: DOM lookup, readouts, LED helpers, and event wiring.
 - `js/shared/utils.js`: shared math/RNG/timing helpers.
+- `js/shared/time-based-voice-settings.js`: time-of-day schedule defaults and effective voice selector.
 
 ## 3) Audio graph overview
 
@@ -127,6 +129,12 @@ Envelope note: exponential ramps cannot target exactly `0`, so a tiny floor (`0.
 - Timers are cleared and rebuilt safely on restart.
 
 This keeps motion subtle without obvious continuous automation.
+
+Time-of-day voice defaults add a separate, slow-moving layer:
+
+- A schedule defines local-time dayparts (afternoon, evening) with density/brightness adjustments.
+- A 10-minute linear transition window blends from the current daypart to the next, completing at the next daypart start.
+- UI sliders remain the base defaults; time-based adjustments are applied at render time so the interface stays stable.
 
 ## 7) Graph adapter and lifecycle
 
@@ -234,6 +242,7 @@ Key behaviors:
 - **End guardrails**: notes are not scheduled too close to file end, and note tails are prevented from overrunning the ending.
 - **Nudges included**: brightness nudge timelines are generated and scheduled in offline rendering so exported timbre movement matches runtime character.
 - **Export-only density taper**: density progressively reduces near the end to create a natural settle-out.
+- **Time-based defaults**: export captures the effective voice settings at export start (based on local time).
 
 Codec/tagging implementation:
 
@@ -264,6 +273,7 @@ Manual checklist also includes export validation:
 
 ```bash
 node generation-regression-check.cjs
+node js/shared/time-based-voice-settings.test.cjs
 ```
 
 ## 14) Web Audio API gotchas to remember
