@@ -24,6 +24,7 @@ async function run() {
 
   const schedule = {
     enabled: true,
+    logTransitions: false,
     transitionWindowMinutes: 10,
     dayparts: [
       {
@@ -54,6 +55,7 @@ async function run() {
 
   const transitionSchedule = {
     enabled: true,
+    logTransitions: false,
     transitionWindowMinutes: 10,
     dayparts: [
       {

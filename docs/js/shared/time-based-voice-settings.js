@@ -1,9 +1,14 @@
 import { clamp, finiteOr } from "./utils.js";
 
 const ZERO_ADJUSTMENT = { density: 0, brightness: 0 };
+const LOG_PREFIX = "[aftertone]";
+let lastTransitionLogKey = null;
+let lastDaypartLogKey = null;
+let lastInvalidScheduleLogKey = null;
 
 export const DEFAULT_TIME_BASED_VOICE_SCHEDULE = {
   enabled: true,
+  logTransitions: true,
   transitionWindowMinutes: 10,
   dayparts: [
     {
@@ -130,6 +135,16 @@ function interpolateAdjustments(a, b, t) {
   };
 }
 
+function formatAdjustment(adjustment) {
+  const density = finiteOr(adjustment && adjustment.density, 0);
+  const brightness = finiteOr(adjustment && adjustment.brightness, 0);
+  return `{density: ${density.toFixed(3)}, brightness: ${brightness.toFixed(3)}}`;
+}
+
+function shouldLogSchedule(schedule) {
+  return !schedule || schedule.logTransitions !== false;
+}
+
 export function resolveTimeBasedVoiceAdjustment(schedule, now = new Date()) {
   if (!schedule || schedule.enabled === false) {
     return {
@@ -142,6 +157,14 @@ export function resolveTimeBasedVoiceAdjustment(schedule, now = new Date()) {
 
   const dayparts = normalizeDayparts(schedule.dayparts);
   if (!dayparts.length) {
+    if (schedule && schedule.enabled !== false && shouldLogSchedule(schedule)) {
+      const dateKey = now instanceof Date ? now.toDateString() : "unknown-date";
+      const invalidKey = `${dateKey}:invalid-schedule`;
+      if (invalidKey !== lastInvalidScheduleLogKey) {
+        lastInvalidScheduleLogKey = invalidKey;
+        console.info(`${LOG_PREFIX} time-based schedule invalid or empty; falling back to base defaults`);
+      }
+    }
     return {
       adjustment: ZERO_ADJUSTMENT,
       daypart: null,
@@ -171,6 +194,14 @@ export function resolveTimeBasedVoiceAdjustment(schedule, now = new Date()) {
   }
 
   const current = dayparts[currentIndex];
+  if (shouldLogSchedule(schedule)) {
+    const dateKey = now instanceof Date ? now.toDateString() : "unknown-date";
+    const daypartKey = `${dateKey}:${current.name || currentIndex}`;
+    if (daypartKey !== lastDaypartLogKey) {
+      lastDaypartLogKey = daypartKey;
+      console.info(`${LOG_PREFIX} time-based daypart active: ${current.name || "daypart"} adjustments ${formatAdjustment(current.adjustments)}`);
+    }
+  }
   const transitionWindowMinutes = Math.max(0, finiteOr(schedule.transitionWindowMinutes, 0));
   let adjustment = current.adjustments;
   let nextDaypart = null;
@@ -183,6 +214,16 @@ export function resolveTimeBasedVoiceAdjustment(schedule, now = new Date()) {
       blend = clamp(1 - minutesUntilEnd / transitionWindowMinutes, 0, 1);
       adjustment = interpolateAdjustments(current.adjustments, next.adjustments, blend);
       nextDaypart = next && next.name ? next.name : null;
+      const shouldLog = shouldLogSchedule(schedule);
+      if (shouldLog && next) {
+        const dateKey = now instanceof Date ? now.toDateString() : "unknown-date";
+        const transitionKey = `${dateKey}:${current.name || currentIndex}->${next.name || currentIndex + 1}`;
+        if (transitionKey !== lastTransitionLogKey) {
+          lastTransitionLogKey = transitionKey;
+          const completesAt = next.start || "next daypart start";
+          console.info(`${LOG_PREFIX} time-based transition starting: ${current.name || "current"} -> ${next.name || "next"} (window ${transitionWindowMinutes}m, completes at ${completesAt}) adjustments ${formatAdjustment(current.adjustments)} -> ${formatAdjustment(next.adjustments)}`);
+        }
+      }
     }
   }
 
