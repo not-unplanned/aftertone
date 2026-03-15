@@ -49,6 +49,7 @@ import {
   setLedLevel,
   updateReadouts,
 } from "./ui/wiring.js";
+import { createVoicesVisualization } from "./ui/voices-visualization.js";
 
 const ui = getUiElements();
 let liveConfig = null;
@@ -122,6 +123,34 @@ function refreshLiveConfig() {
 function refreshUI() {
   const cfg = refreshLiveConfig();
   updateReadouts(ui, cfg, formatNoiseVolumeReadout);
+}
+
+function getVisualizationState() {
+  const fallbackConfig = liveConfig || getEngineConfigFromUI(ui);
+  const effectiveVoices = getEffectiveVoices();
+  const voices = effectiveVoices || (fallbackConfig && fallbackConfig.voices);
+  const voiceA = voices && voices.a ? voices.a : { brightness: 0 };
+  const voiceB = voices && voices.b ? voices.b : { brightness: 0 };
+
+  return {
+    running,
+    paused: isPaused,
+    noise: {
+      control: fallbackConfig && fallbackConfig.noise ? fallbackConfig.noise.control : 0,
+      color: fallbackConfig && fallbackConfig.noise ? fallbackConfig.noise.color : 0,
+      pan: fallbackConfig && fallbackConfig.noise ? fallbackConfig.noise.pan : 0,
+    },
+    voices: {
+      a: {
+        amplitude: meterLevelA,
+        brightness: clamp((voiceA.brightness ?? 0) + musicBrightOffsetA, 0, 1),
+      },
+      b: {
+        amplitude: meterLevelB,
+        brightness: clamp((voiceB.brightness ?? 0) + musicBrightOffsetB, 0, 1),
+      },
+    },
+  };
 }
 
 function setPlaybackState(state) {
@@ -567,6 +596,7 @@ function handleExportClick() {
 
 function init() {
   refreshUI();
+  createVoicesVisualization(ui.voicesViz, getVisualizationState);
   meterLoop();
   setupMediaSession();
   ui.exportTrack.textContent = getExportTrackLabel();
