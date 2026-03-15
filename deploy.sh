@@ -2,7 +2,7 @@
 set -ex
 
 rm -rf docs/*
-for F in *.html  LICENSE
+for F in *.html  LICENSE aftertone.png
 do
   cp "$F" ./docs/
 done
