@@ -14,4 +14,6 @@ done
 
 git add docs
 git commit -m "Deploy"
+
+echo About to push to `main` this makes the version in ./docs available on not-unplanned.github.io/
 git push
