@@ -61,6 +61,8 @@ export function createVoicesVisualization(canvas, getState) {
     ampB: 0,
     brightA: 0,
     brightB: 0,
+    panA: 0,
+    panB: 0,
   };
 
   let rafId = 0;
@@ -195,6 +197,8 @@ export function createVoicesVisualization(canvas, getState) {
     const ampB = clamp(snapshot.voices && snapshot.voices.b && snapshot.voices.b.amplitude, 0, 1) * activity;
     const brightA = clamp(snapshot.voices && snapshot.voices.a && snapshot.voices.a.brightness, 0, 1);
     const brightB = clamp(snapshot.voices && snapshot.voices.b && snapshot.voices.b.brightness, 0, 1);
+    const panA = clamp(snapshot.voices && snapshot.voices.a && snapshot.voices.a.pan, -1, 1);
+    const panB = clamp(snapshot.voices && snapshot.voices.b && snapshot.voices.b.pan, -1, 1);
 
     smooth.noise = lerp(smooth.noise, noiseLevel, smoothing);
     smooth.noiseColor = lerp(smooth.noiseColor, noiseColor, smoothing);
@@ -203,6 +207,9 @@ export function createVoicesVisualization(canvas, getState) {
     smooth.ampB = lerp(smooth.ampB, ampB, smoothing);
     smooth.brightA = lerp(smooth.brightA, brightA, smoothing);
     smooth.brightB = lerp(smooth.brightB, brightB, smoothing);
+    const panSmoothing = 1 - Math.exp(-dt * 14);
+    smooth.panA = lerp(smooth.panA, panA, panSmoothing);
+    smooth.panB = lerp(smooth.panB, panB, panSmoothing);
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = stage.background || "#0a0a12";
@@ -212,8 +219,14 @@ export function createVoicesVisualization(canvas, getState) {
 
     const maxRadius = Math.min(width, height) * 0.32;
     const y = height * 0.54;
-    const xA = width * 0.33;
-    const xB = width * 0.67;
+    const centerX = width * 0.5;
+    const margin = Math.max(12, maxRadius * 0.22);
+    const innerSpan = Math.max(0, (width - maxRadius * 2 - margin * 2) * 0.5);
+    const panMax = 0.35;
+    const panNormA = clamp(smooth.panA / panMax, -1, 1);
+    const panNormB = clamp(smooth.panB / panMax, -1, 1);
+    const xA = clamp(centerX + panNormA * innerSpan, maxRadius + margin, width - maxRadius - margin);
+    const xB = clamp(centerX + panNormB * innerSpan, maxRadius + margin, width - maxRadius - margin);
     const paletteA = getVoicePalette(210, smooth.brightA);
     const paletteB = getVoicePalette(24, smooth.brightB);
     drawVoiceCircle(xA, y, smooth.ampA * maxRadius, paletteA, 0.5 + smooth.ampA * 0.5);

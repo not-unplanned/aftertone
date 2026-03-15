@@ -1,5 +1,5 @@
 // Tonal voice composition, scheduling, and profiles.
-import { clamp, finiteOr, sleep } from "../shared/utils.js";
+import { clamp, finiteOr, randBetweenWith, sleep } from "../shared/utils.js";
 import {
   DEBUG_RUNTIME,
   SCHEDULER_LATE_WARN_MS,
@@ -146,8 +146,16 @@ export function playNoteAtTime(audioCtx, targetBus, startTime, freq, amp, durSec
   const detuneCents = profile.detuneCents ?? 4;
   carrier.detune.setValueAtTime((rand() * 2 - 1) * detuneCents, t0);
 
+  const panner = audioCtx.createStereoPanner();
+  const panRampSec = clamp(finiteOr(profile.panRampSec, 0.08), 0, 0.2);
+  const panMax = clamp(finiteOr(profile.panMax, 0.35), 0, 1);
+  const panValue = clamp(finiteOr(profile.panValue, 0), -panMax, panMax);
+  panner.pan.setValueAtTime(0, t0);
+  panner.pan.linearRampToValueAtTime(panValue, t0 + panRampSec);
+
   carrier.connect(vca);
-  vca.connect(targetBus);
+  vca.connect(panner);
+  panner.connect(targetBus);
 
   mod.start(t0);
   carrier.start(t0);
@@ -191,7 +199,74 @@ export function createVoiceComposer(profile = {}, rand = Math.random) {
 
 export function createTimedNoteRenderer(audioCtx, targetBus, profile = {}, rand = Math.random) {
   return function renderNoteAtTime(noteStartTime, note) {
-    playNoteAtTime(audioCtx, targetBus, noteStartTime, note.freq, note.amp, note.dur, note.bright, profile, rand);
+    const panValue = Number.isFinite(note && note.pan) ? note.pan : 0;
+    playNoteAtTime(audioCtx, targetBus, noteStartTime, note.freq, note.amp, note.dur, note.bright, {
+      ...profile,
+      panValue,
+    }, rand);
+  };
+}
+
+export function createTonalPanSampler(options = {}) {
+  const overlapMax = clamp(finiteOr(options.overlapMax, 0.2), 0, 1);
+  const outlierMax = clamp(finiteOr(options.outlierMax, 0.35), overlapMax, 1);
+  const outlierProbability = clamp(finiteOr(options.outlierProbability, 0.18), 0, 0.2);
+  const maxStep = clamp(finiteOr(options.maxStep, 0.15), 0.01, 1);
+  const centerStep = clamp(finiteOr(options.centerStep, 0.08), 0.01, overlapMax);
+  const jitter = clamp(finiteOr(options.jitter, 0.05), 0, overlapMax);
+  const minPan = clamp(finiteOr(options.minPan, 0.01), 0, overlapMax);
+  const rand = typeof options.rand === "function" ? options.rand : Math.random;
+
+  const state = {
+    center: 0,
+    last: {
+      a: 0,
+      b: 0,
+    },
+  };
+
+  function updateCenter() {
+    const delta = randBetweenWith(rand, -centerStep, centerStep);
+    state.center = clamp(state.center + delta, -overlapMax, overlapMax);
+    return state.center;
+  }
+
+  function sampleTarget() {
+    const center = updateCenter();
+    const isOutlier = rand() < outlierProbability;
+    if (!isOutlier) {
+      return clamp(center + randBetweenWith(rand, -jitter, jitter), -overlapMax, overlapMax);
+    }
+
+    const sign = center === 0 ? (rand() < 0.5 ? -1 : 1) : Math.sign(center);
+    const magnitude = randBetweenWith(rand, overlapMax, outlierMax);
+    return clamp(sign * magnitude, -outlierMax, outlierMax);
+  }
+
+  function applyStepLimit(last, target) {
+    const delta = clamp(target - last, -maxStep, maxStep);
+    const stepped = clamp(last + delta, -outlierMax, outlierMax);
+    if (Math.abs(stepped) >= minPan) return stepped;
+    const sign = last !== 0 ? Math.sign(last) : (target === 0 ? (rand() < 0.5 ? -1 : 1) : Math.sign(target));
+    const adjusted = clamp(sign * minPan, last - maxStep, last + maxStep);
+    return clamp(adjusted, -outlierMax, outlierMax);
+  }
+
+  function sample(voiceId) {
+    const target = sampleTarget();
+    const last = Number.isFinite(state.last[voiceId]) ? state.last[voiceId] : 0;
+    const next = applyStepLimit(last, target);
+    state.last[voiceId] = next;
+    return next;
+  }
+
+  function getLastPan(voiceId) {
+    return Number.isFinite(state.last[voiceId]) ? state.last[voiceId] : 0;
+  }
+
+  return {
+    sample,
+    getLastPan,
   };
 }
 

@@ -1,18 +1,4 @@
-## Requirements
-
-### Requirement: Visualization surface
-The UI SHALL include a new card dedicated to the three-voice visualization that contains a single canvas used as the rendering surface. The canvas SHALL scale to the card's drawable area.
-
-#### Scenario: Visualization card renders
-- **WHEN** the page loads
-- **THEN** a visualization card is present with a single canvas sized to the card bounds
-
-### Requirement: Noise field reflects noise controls
-The visualization SHALL render a full-surface noise/static field. The noise volume control SHALL scale field intensity, the noise color control SHALL shift the palette from white to pink to brown, and the noise pan control SHALL bias intensity left-to-right.
-
-#### Scenario: Noise field updates with inputs
-- **WHEN** noise volume, color, or pan input values change
-- **THEN** the noise field intensity, palette, or left/right balance updates to reflect the new values
+## MODIFIED Requirements
 
 ### Requirement: Tonal circles reflect amplitude, brightness, and per-note placement
 The visualization SHALL render two circles representing tonal generator A and B. Each circle radius SHALL be proportional to the current unmixed amplitude for its voice (pre-mix). Each circle color selection SHALL be derived from the corresponding brightness control. Each circle horizontal position SHALL be derived from the tonal voice stereo pan value, mapping negative pan left of center and positive pan right of center. The circle position SHALL remain stable for the duration of a note while its pan sample is held, and SHALL update when a new pan sample is applied.
