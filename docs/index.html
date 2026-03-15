@@ -83,6 +83,25 @@
       gap: 8px;
     }
 
+    .card--visual {
+      flex: 1 1 100%;
+    }
+
+    .visualization-stage {
+      position: relative;
+      height: clamp(200px, 28vw, 280px);
+      border-radius: 12px;
+      overflow: hidden;
+      background: radial-gradient(circle at 20% 20%, #14141c, #0a0a0f 60%, #09090d 100%);
+      border: 1px solid #1b1b22;
+    }
+
+    .visualization-stage canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
     .led {
       width: 10px;
       height: 10px;
@@ -280,6 +299,15 @@
       <!--div class="tiny">
         Tuned as a lighter upper voice with longer tails. Offset from A for call-and-response motion.
       </div-->
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card card--visual">
+      <h2>Voice field</h2>
+      <div class="visualization-stage">
+        <canvas id="voicesViz" role="img" aria-label="Visualization of noise and tonal voices"></canvas>
+      </div>
     </div>
   </div>
 

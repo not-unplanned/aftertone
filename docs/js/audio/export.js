@@ -27,7 +27,12 @@ import {
   MUSIC_NUDGE_TIMING,
 } from "./constants.js";
 import { applyNoiseColorToNodes, buildGraph, setMusicBrightnessAtTime } from "./engine.js";
-import { createTimedNoteRenderer, createVoiceComposer, sanitizeVoiceState } from "./voices.js";
+import {
+  createTimedNoteRenderer,
+  createTonalPanSampler,
+  createVoiceComposer,
+  sanitizeVoiceState,
+} from "./voices.js";
 
 let isExportingTrack = false;
 let exportCodecModulesPromise = null;
@@ -131,6 +136,8 @@ function renderOfflineVoiceTimeline(audioCtx, durationSec, getVoiceStateAtTime, 
   const safeDurationSec = Math.max(1, finiteOr(durationSec, EXPORT_DURATION_SEC));
   const scheduleCutoffSec = clamp(finiteOr(options.scheduleCutoffSec, safeDurationSec), 0, safeDurationSec);
   const noteTailCutoffSec = clamp(finiteOr(options.noteTailCutoffSec, safeDurationSec), 0, safeDurationSec);
+  const panSampler = options && typeof options.panSampler?.sample === "function" ? options.panSampler : null;
+  const voiceId = options && typeof options.voiceId === "string" ? options.voiceId : "";
   const maxEvents = 24000;
   let nextNoteAt = 0;
   let noteCount = 0;
@@ -143,6 +150,9 @@ function renderOfflineVoiceTimeline(audioCtx, durationSec, getVoiceStateAtTime, 
 
     const stateAtNote = sanitizeVoiceState(getVoiceStateAtTime(nextNoteAt));
     event.note.bright = stateAtNote.brightness;
+    if (panSampler && voiceId) {
+      event.note.pan = panSampler.sample(voiceId);
+    }
     if ((nextNoteAt + event.note.dur) > noteTailCutoffSec) break;
 
     renderNoteAtTime(nextNoteAt, event.note);
@@ -425,6 +435,8 @@ export async function exportTrackMp3({ config, updateUi }) {
     const rngB = createSeededRng(exportSeed ^ 0x5a5a5a5a);
     const rngNudgeA = createSeededRng(exportSeed ^ 0x11aa66bb);
     const rngNudgeB = createSeededRng(exportSeed ^ 0xbb66aa11);
+    const rngPan = createSeededRng(exportSeed ^ 0x3c6ef372);
+    const panSampler = createTonalPanSampler({ rand: rngPan });
 
     const graph = await buildGraph(offlineCtx, snapshot, {
       offlineRenderDurationSec: EXPORT_DURATION_SEC,
@@ -448,10 +460,14 @@ export async function exportTrackMp3({ config, updateUi }) {
     const noteCountA = renderOfflineVoiceTimeline(offlineCtx, EXPORT_DURATION_SEC, getVoiceStateA, graph.musicA.musicBus, graph.voiceA, rngA, {
       scheduleCutoffSec,
       noteTailCutoffSec,
+      panSampler,
+      voiceId: "a",
     });
     const noteCountB = renderOfflineVoiceTimeline(offlineCtx, EXPORT_DURATION_SEC, getVoiceStateB, graph.musicB.musicBus, graph.voiceB, rngB, {
       scheduleCutoffSec,
       noteTailCutoffSec,
+      panSampler,
+      voiceId: "b",
     });
 
     const rendered = await offlineCtx.startRendering();

@@ -36,6 +36,7 @@ import {
 import {
   createSchedulerMetrics,
   createTimedNoteRenderer,
+  createTonalPanSampler,
   schedulerLoop,
 } from "./audio/voices.js";
 import {
@@ -49,6 +50,7 @@ import {
   setLedLevel,
   updateReadouts,
 } from "./ui/wiring.js";
+import { createVoicesVisualization } from "./ui/voices-visualization.js";
 
 const ui = getUiElements();
 let liveConfig = null;
@@ -122,6 +124,36 @@ function refreshLiveConfig() {
 function refreshUI() {
   const cfg = refreshLiveConfig();
   updateReadouts(ui, cfg, formatNoiseVolumeReadout);
+}
+
+function getVisualizationState() {
+  const fallbackConfig = liveConfig || getEngineConfigFromUI(ui);
+  const effectiveVoices = getEffectiveVoices();
+  const voices = effectiveVoices || (fallbackConfig && fallbackConfig.voices);
+  const voiceA = voices && voices.a ? voices.a : { brightness: 0 };
+  const voiceB = voices && voices.b ? voices.b : { brightness: 0 };
+
+  return {
+    running,
+    paused: isPaused,
+    noise: {
+      control: fallbackConfig && fallbackConfig.noise ? fallbackConfig.noise.control : 0,
+      color: fallbackConfig && fallbackConfig.noise ? fallbackConfig.noise.color : 0,
+      pan: fallbackConfig && fallbackConfig.noise ? fallbackConfig.noise.pan : 0,
+    },
+    voices: {
+      a: {
+        amplitude: meterLevelA,
+        brightness: clamp((voiceA.brightness ?? 0) + musicBrightOffsetA, 0, 1),
+        pan: notePanA,
+      },
+      b: {
+        amplitude: meterLevelB,
+        brightness: clamp((voiceB.brightness ?? 0) + musicBrightOffsetB, 0, 1),
+        pan: notePanB,
+      },
+    },
+  };
 }
 
 function setPlaybackState(state) {
@@ -243,6 +275,9 @@ let meterLevelNoise = 0;
 let meterLevelA = 0;
 let meterLevelB = 0;
 let meterLevelExport = 0;
+let tonalPanSampler = null;
+let notePanA = 0;
+let notePanB = 0;
 
 // nodes
 let masterMeter = null;
@@ -337,6 +372,11 @@ async function start() {
   refreshLiveConfig();
   const sessionSeed = getDefaultSeed();
   setRandomSeed(sessionSeed);
+  tonalPanSampler = createTonalPanSampler({
+    rand: createSeededRng(sessionSeed ^ 0x9e3779b1),
+  });
+  notePanA = 0;
+  notePanB = 0;
   if (DEBUG_RUNTIME) console.debug(`[aftertone] seed ${sessionSeed}`);
 
   // Must be created in a user gesture (button click) on modern browsers.
@@ -391,6 +431,28 @@ async function start() {
   if (DEBUG_RUNTIME) window.__aftertoneDiagnostics = runtimeDiagnostics;
   const renderVoiceA = createTimedNoteRenderer(ctx, musicA.musicBus, voiceA, random01);
   const renderVoiceB = createTimedNoteRenderer(ctx, musicB.musicBus, voiceB, random01);
+  const renderVoiceAWithPan = (noteStartTime, note) => {
+    if (tonalPanSampler) {
+      const pan = tonalPanSampler.sample("a");
+      note.pan = pan;
+      notePanA = pan;
+    } else {
+      note.pan = 0;
+      notePanA = 0;
+    }
+    renderVoiceA(noteStartTime, note);
+  };
+  const renderVoiceBWithPan = (noteStartTime, note) => {
+    if (tonalPanSampler) {
+      const pan = tonalPanSampler.sample("b");
+      note.pan = pan;
+      notePanB = pan;
+    } else {
+      note.pan = 0;
+      notePanB = 0;
+    }
+    renderVoiceB(noteStartTime, note);
+  };
   const shouldPause = () => isPaused || isPausing || (ctx && ctx.state === "suspended");
   schedulerLoop({
     abortToken: schedulerAbortA,
@@ -399,7 +461,7 @@ async function start() {
       const effectiveVoices = getEffectiveVoices();
       return effectiveVoices ? effectiveVoices.a : liveConfig.voices.a;
     },
-    renderNoteAtTime: renderVoiceA,
+    renderNoteAtTime: renderVoiceAWithPan,
     profile: voiceA,
     metrics: metricsA,
     rand: random01,
@@ -412,7 +474,7 @@ async function start() {
       const effectiveVoices = getEffectiveVoices();
       return effectiveVoices ? effectiveVoices.b : liveConfig.voices.b;
     },
-    renderNoteAtTime: renderVoiceB,
+    renderNoteAtTime: renderVoiceBWithPan,
     profile: voiceB,
     metrics: metricsB,
     rand: random01,
@@ -534,6 +596,9 @@ async function stop() {
   meterLevelNoise = 0;
   meterLevelA = 0;
   meterLevelB = 0;
+  tonalPanSampler = null;
+  notePanA = 0;
+  notePanB = 0;
   setLedLevel(ui.masterLed, 0);
   setLedLevel(ui.noiseLed, 0);
   setLedLevel(ui.musicLedA, 0);
@@ -567,6 +632,7 @@ function handleExportClick() {
 
 function init() {
   refreshUI();
+  createVoicesVisualization(ui.voicesViz, getVisualizationState);
   meterLoop();
   setupMediaSession();
   ui.exportTrack.textContent = getExportTrackLabel();

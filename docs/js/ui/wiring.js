@@ -19,6 +19,7 @@ export function getUiElements() {
     musicVol2: $("musicVol2"),
     density2: $("density2"),
     brightness2: $("brightness2"),
+    voicesViz: $("voicesViz"),
     masterLed: $("masterLed"),
     noiseLed: $("noiseLed"),
     musicLedA: $("musicLedA"),
